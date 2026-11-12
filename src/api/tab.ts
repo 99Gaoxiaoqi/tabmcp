@@ -74,6 +74,8 @@ export interface GotoResult {
   url: string;
   /** True when url !== requestedUrl: a 200 does not mean "you are where you asked". */
   landedElsewhere: boolean;
+  /** The document has content but some request is still running. */
+  stillLoading?: boolean;
   title: string;
   status: number | null;
   /** Present only when the page loaded but has no usable content. */
@@ -145,7 +147,10 @@ export class Tab {
   /** Navigation: bounded wait, then settle so the caller sees a ready page. */
   async goto(url: string, options: GotoOptions = {}): Promise<GotoResult> {
     const timeoutMs = options.timeoutMs ?? 30_000;
-    const waitUntil = options.waitUntil ?? 'load';
+    // 'load' never fires on pages that keep a long-poll or a websocket open, and
+    // waiting for it turned ordinary sites into 30-second failures. Commit, then
+    // judge by whether the document actually has content.
+    const waitUntil = options.waitUntil ?? 'domcontentloaded';
     if (!/^https?:\/\/|^about:|^data:/i.test(url)) {
       throw new ActionError('E_BAD_URL', `Refusing to navigate to "${url}"`, {
         hint: 'Use an absolute http(s) URL.',
@@ -154,22 +159,54 @@ export class Tab {
     const source = await this.ensureReady();
     const started = Date.now();
     let status: number | null = null;
+    let navigationError: unknown = null;
     try {
       const result = await this.page.goto(url, {
         timeoutMs,
-        waitUntil: waitUntil === 'none' ? 'commit' : waitUntil,
+        waitUntil: waitUntil === 'none' ? 'commit' : 'commit',
       });
       status = result.status;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      navigationError = err;
+    }
+
+    // Give the document a bounded chance to become usable. A page that is already
+    // rendering is not a failure just because some request never finished.
+    if (waitUntil !== 'none') {
+      const deadline = Date.now() + Math.min(timeoutMs, 5_000);
+      const startedWaiting = Date.now();
+      while (Date.now() < deadline) {
+        const ready = await this.page.evaluate<string>('document.readyState').catch(() => 'loading');
+        if (ready === 'complete') break;
+        if (ready === 'interactive' && Date.now() - startedWaiting > 800) break;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+    }
+
+    if (navigationError && waitUntil !== 'none') {
+      const hasContent = (await this.page.contentState().catch(() => 'unknown' as const)) === 'ready';
+      if (!hasContent) {
+        const message = navigationError instanceof Error ? navigationError.message : String(navigationError);
+        if (/Timeout/i.test(message)) {
+          throw new ActionError('E_NAV_TIMEOUT', `Navigation to ${url} timed out after ${timeoutMs}ms`, {
+            hint: 'The page never produced content; retry with a larger timeoutMs.',
+            cause: navigationError,
+          });
+        }
+        throw new ActionError('E_ACTION_FAILED', message, { cause: navigationError });
+      }
+      // Content exists: report success and say the document is still loading.
+    } else if (navigationError) {
+      const message = navigationError instanceof Error ? navigationError.message : String(navigationError);
       if (/Timeout/i.test(message)) {
         throw new ActionError('E_NAV_TIMEOUT', `Navigation to ${url} timed out after ${timeoutMs}ms`, {
-          hint: 'The page may be slow or blocking; retry with a larger timeoutMs.',
-          cause: err,
+          hint: 'The page never produced content; retry with a larger timeoutMs.',
+          cause: navigationError,
         });
       }
-      throw new ActionError('E_ACTION_FAILED', message, { cause: err });
+      throw new ActionError('E_ACTION_FAILED', message, { cause: navigationError });
     }
+    const stillLoading = navigationError !== null;
     await installActivity(this.page);
     await settle(source, started, options.settleMs ?? 1200, this.tuning);
     this.refs = new RefRegistry();
@@ -184,6 +221,13 @@ export class Tab {
       if (retry !== 'empty') content = retry;
     }
     const finalUrl = await this.page.url().catch(() => url);
+    // Chrome's network error page has content, so content alone must not turn a
+    // failed load into a success.
+    if (/^chrome-error:/i.test(finalUrl)) {
+      throw new ActionError('E_NAV_FAILED', `Navigation to ${url} failed: ${finalUrl}`, {
+        hint: 'The network or TLS handshake did not complete. Check connectivity and retry.',
+      });
+    }
     const landedElsewhere = finalUrl !== url;
     return {
       ok: true,
@@ -193,6 +237,7 @@ export class Tab {
       title: await this.page.title().catch(() => ''),
       status,
       ...(content === 'empty' || content === 'placeholder' ? { content } : {}),
+      ...(stillLoading ? { stillLoading: true } : {}),
     };
   }
 

@@ -12,6 +12,7 @@ export type ErrorCode =
   | 'E_NO_TAB'
   | 'E_BAD_URL'
   | 'E_NAV_TIMEOUT'
+  | 'E_NAV_FAILED'
   | 'E_PRECONDITION_FAILED'
   | 'E_REF_INVALID'
   | 'E_REF_STALE'

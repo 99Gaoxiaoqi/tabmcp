@@ -1,0 +1,10 @@
+This project is an independent implementation and is not affiliated with
+jackwener/BrowserMCP or the BrowserMCP organisation.
+
+No source code from those projects was copied into this repository. Their public
+behaviour (tool names, result shapes, failure modes, adapter model) was studied in
+order to align behaviour; every line here was written for this project.
+
+If a fragment is later found to be a recognizable derivative of an Apache-2.0
+project, it must be attributed here, with the upstream repository, commit and the
+files involved.

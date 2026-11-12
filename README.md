@@ -1,5 +1,13 @@
 # browsermcp-core
 
+> **Independent implementation.** This project is not affiliated with
+> [`jackwener/BrowserMCP`](https://github.com/jackwener/BrowserMCP) or the `BrowserMCP`
+> organisation. No source code was copied from either. The public behaviour of the
+> reference project was studied to align tool shapes and failure modes; the
+> implementation here was written from scratch. If any fragment turns out to be a
+> recognizable derivative, it will be attributed in `NOTICE`.
+
+
 Behavior-aligned, independently written browser MCP core.
 
 Five tools over MCP stdio — `browser_goto`, `browser_observe`, `browser_act`,
