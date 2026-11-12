@@ -64,12 +64,17 @@ than a static page.
 npm test    # settle contract (fake activity source) + MCP round-trip when a browser is up
 ```
 
-## Not done yet
+## Status: usable
 
-- Extension transport (MV3 + native messaging) — the `BrowserSession` interface in
-  `src/transport/cdp.ts` is the seam; the API layer does not change.
-- Persistent JS REPL, named tab groups, session recovery, per-agent isolation.
-- Site adapters and recon.
+Both transports work against a real Chrome: CDP (`--connect`) and the extension
+(`--extension`). Verified on real sites, not only on a local test page.
+
+- 18 MCP tools, identical result fields on both channels (asserted in tests)
+- persistent JS REPL, named tab groups, session recovery, per-agent tab isolation
+- site adapters with a draft gate, plus recon that records XHR/fetch traffic
+- every failure carries a branchable code; transport errors are classified once
+
+Known platform limits are listed in `docs_get` under `channels`.
 
 ## M2: extension transport (verified end to end)
 

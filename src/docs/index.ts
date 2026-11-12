@@ -81,6 +81,15 @@ What differs:
 - cold start: after the native host restarts, the extension reconnects within about
   two seconds, and calls in that window fail with \`E_BROWSER_DISCONNECTED\`.
 
+Platform limits that look like our bugs but are not:
+
+- Chrome's native messaging manifest has no \`args\` field. A host that needs
+  arguments must be a launcher that resolves them itself; if you point \`path\` at an
+  interpreter and pass \`args\`, \`connectNative\` simply fails and reports "not
+  connected", which sends you looking at the registry instead.
+- Under headless Chrome, \`chrome.downloads\` never fires, so \`browser_download\` on the
+  extension channel fails with \`E_ACTION_TIMEOUT\`. Headed Chrome has not been verified.
+
 Cookies are trimmed on purpose: \`expires\`, \`session\`, \`priority\`, \`size\`,
 \`sourcePort\` and \`sourceScheme\` are dropped so both channels agree.
 `;
