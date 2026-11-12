@@ -144,3 +144,12 @@ test('a corrupt state file does not stop the session', async () => {
   const session = new JsSession({}, { statePath });
   assert.equal((await session.run('1 + 1')).value, 2);
 });
+
+
+test('REPL awaits a trailing promise instead of printing {}', async () => {
+  const repl = session();
+  const result = await repl.run('new Promise((resolve) => setTimeout(() => resolve({ answered: 42 }), 20))');
+  assert.equal(result.ok, true);
+  // Values cross the vm boundary, so their prototype is not the host's.
+  assert.deepEqual(JSON.parse(JSON.stringify(result.value)), { answered: 42 });
+});

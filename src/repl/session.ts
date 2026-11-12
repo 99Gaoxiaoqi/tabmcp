@@ -269,7 +269,21 @@ export class JsSession {
           this.boundNames.add(name);
         }
       }
+      // An un-awaited Promise prints as {} and looks like success — the worst kind of
+      // failure. Await it here so the trailing expression always reports its value.
       value = settled.__expr;
+      if (value && typeof (value as { then?: unknown }).then === 'function') {
+        const pendingExpr = value as Promise<unknown>;
+        let timer2: NodeJS.Timeout | undefined;
+        value = await Promise.race([
+          pendingExpr,
+          new Promise<never>((_resolve, reject) => {
+            timer2 = setTimeout(() => reject(new Error(`promise did not settle within ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]).finally(() => {
+          if (timer2) clearTimeout(timer2);
+        });
+      }
       this.persist();
       return {
         ok: true,
