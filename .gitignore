@@ -1,0 +1,14 @@
+node_modules/
+dist/
+scratch/
+
+# Secrets and build artefacts never enter the repo.
+*.pem
+.extension-key.pem
+native-host.exe
+native-host.cmd
+
+# Probe output and logs
+*.log
+probe-*.txt
+admin-result.txt

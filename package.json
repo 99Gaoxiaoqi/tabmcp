@@ -1,0 +1,25 @@
+{
+  "name": "@local/browsermcp-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Behavior-aligned rebuild of a browser MCP core: event-based settle, opaque refs, ARIA snapshots.",
+  "engines": { "node": ">=22" },
+  "bin": { "browsermcp-core": "dist/src/main.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/tests/*.test.js",
+    "smoke": "node dist/tests/smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "playwright-core": "^1.65.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}
+
