@@ -42,8 +42,10 @@ test('MCP server exposes the five browser tools', async (t) => {
   try {
     const tools = await client.listTools();
     const names = tools.tools.map((tool) => tool.name).sort();
-    // The tool list is the contract: new tools must be added here deliberately.
-    assert.deepEqual(names, [
+    // Adapter tools are registered per installed adapter, so the exact list depends on
+    // the machine. The built-ins must all be there; anything extra must look like an
+    // adapter tool (<site>_<command>) rather than a typo.
+    const builtins = [
       'browser_act',
       'browser_cookies',
       'browser_download',
@@ -62,7 +64,12 @@ test('MCP server exposes the five browser tools', async (t) => {
       'recon_start',
       'site_run',
       'sites_search',
-    ]);
+    ];
+    for (const name of builtins) assert.ok(names.includes(name), `missing built-in tool: ${name}`);
+    const extras = names.filter((name) => !builtins.includes(name));
+    for (const name of extras) {
+      assert.match(name, /^[a-z0-9]+_[a-z0-9_]+$/, `unexpected tool: ${name}`);
+    }
 
     // A tool call over the real protocol, not just a listing.
     const nav = await client.callTool({
