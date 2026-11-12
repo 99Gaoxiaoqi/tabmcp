@@ -68,7 +68,12 @@ export interface ReadOptions {
 
 export interface GotoResult {
   ok: true;
+  /** What the caller asked for. */
+  requestedUrl: string;
+  /** Where the browser actually ended up; a redirect or a login wall changes it. */
   url: string;
+  /** True when url !== requestedUrl: a 200 does not mean "you are where you asked". */
+  landedElsewhere: boolean;
   title: string;
   status: number | null;
   /** Present only when the page loaded but has no usable content. */
@@ -178,9 +183,13 @@ export class Tab {
       const retry = await this.page.contentState().catch(() => 'unknown' as const);
       if (retry !== 'empty') content = retry;
     }
+    const finalUrl = await this.page.url().catch(() => url);
+    const landedElsewhere = finalUrl !== url;
     return {
       ok: true,
-      url: await this.page.url().catch(() => url),
+      requestedUrl: url,
+      url: finalUrl,
+      landedElsewhere,
       title: await this.page.title().catch(() => ''),
       status,
       ...(content === 'empty' || content === 'placeholder' ? { content } : {}),
