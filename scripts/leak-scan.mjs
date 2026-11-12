@@ -41,6 +41,8 @@ const PROBE_LINES = [
   'node = C:' + String.fromCharCode(92) + 'Program Files' + String.fromCharCode(92) + 'nodejs.exe',
   'repo = D:/work/example/file.js',
   'mixed = D:' + String.fromCharCode(92) + 'work' + String.fromCharCode(92) + 'example',
+  'home = C:/Users/example/app.js',
+  'home2 = C:' + String.fromCharCode(92) + 'Users' + String.fromCharCode(92) + 'example',
 ];
 const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'leakscan-'));
 const probeFile = path.join(probeDir, 'probe.txt');
@@ -48,9 +50,14 @@ fs.writeFileSync(probeFile, PROBE_LINES.join('\n') + '\n');
 const probeHits = scanText(fs.readFileSync(probeFile, 'utf8'));
 fs.rmSync(probeDir, { recursive: true, force: true });
 
-if (probeHits.length < 3) {
-  console.error(`scanner self-check FAILED: expected >=3 hits on the probe, got ${probeHits.length}`);
-  console.error('the needles are probably wrong — fix them before trusting a clean result');
+const probeText = PROBE_LINES.join('\n');
+const missingRoots = roots.filter((root) => !probeText.includes(root));
+const separatorHits = new Set(probeHits.map((hit) => (hit.needle.includes('/') ? 'forward' : 'back')));
+
+if (probeHits.length < 3 || missingRoots.length > 0 || separatorHits.size < 2) {
+  console.error(`scanner self-check FAILED: ${probeHits.length} hits, missing roots: ${missingRoots.join(', ') || 'none'}`);
+  console.error('either a needle is wrong, or a root was added without a probe line for it');
+  console.error('do not trust a clean result until this passes');
   process.exit(2);
 }
 console.log(`scanner self-check: ${probeHits.length} hits on the probe (both separators)`);
