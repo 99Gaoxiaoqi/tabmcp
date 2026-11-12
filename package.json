@@ -4,13 +4,18 @@
   "private": true,
   "type": "module",
   "description": "Behavior-aligned rebuild of a browser MCP core: event-based settle, opaque refs, ARIA snapshots.",
-  "engines": { "node": ">=22" },
-  "bin": { "browsermcp-core": "dist/src/main.js" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "browsermcp-core": "dist/src/main.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/tests/*.test.js",
-    "verify": "npm run typecheck && npm run build && npm test"
+    "verify": "node scripts/generate-host-config.mjs && npm run typecheck && npm run build && npm test",
+    "setup:extension": "node scripts/generate-host-config.mjs && node scripts/setup-extension.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -22,4 +27,3 @@
     "typescript": "^5.9.3"
   }
 }
-

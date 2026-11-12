@@ -10,7 +10,7 @@
  * all state that matters belongs to the host.
  */
 
-const HOST_NAME = 'com.local.browsermcp_core';
+import { HOST_NAME } from './host-config.js';
 
 let port = null;
 let nextFrameId = 1;

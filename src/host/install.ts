@@ -11,7 +11,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-export const HOST_NAME = 'com.local.browsermcp_core';
+/**
+ * The native host name is the one string that must agree in three places: the
+ * registry key, the host manifest, and the extension's connectNative call. It is
+ * written once in host.config.json and read from there.
+ */
+export function hostName(): string {
+  const candidates = [
+    path.join(process.cwd(), 'host.config.json'),
+    path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'host.config.json'),
+    path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', '..', 'host.config.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8').replace(/^\uFEFF/, '')) as { hostName?: string };
+      if (parsed.hostName) return parsed.hostName;
+    } catch {
+      // try the next location
+    }
+  }
+  return 'com.local.browsermcp_core';
+}
+
+export const HOST_NAME = hostName();
 
 export interface InstallOptions {
   /** Absolute path to the extension directory (contains manifest.json). */

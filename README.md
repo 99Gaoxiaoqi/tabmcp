@@ -45,7 +45,7 @@ MCP client config:
   "mcpServers": {
     "browsermcp-core": {
       "command": "node",
-      "args": ["D:/work/browsermcp-rebuild/dist/src/main.js", "--connect", "http://127.0.0.1:9222"]
+      "args": ["<absolute-path-to>/dist/src/main.js", "--connect", "http://127.0.0.1:9222"]
     }
   }
 }
