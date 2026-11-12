@@ -31,6 +31,8 @@ import type {
 
 interface BrokerClientOptions {
   stateFile: string;
+  /** How long to wait for a live broker while Chrome restarts its host. */
+  waitMs?: number;
 }
 
 /** One connection to the broker, shared by every page of this session. */
@@ -63,20 +65,38 @@ class BrokerClient {
   }
 
   static async connect(options: BrokerClientOptions): Promise<BrokerClient> {
-    if (!fs.existsSync(options.stateFile)) {
-      throw new ActionError('E_BROWSER_DISCONNECTED', `broker state file missing: ${options.stateFile}`, {
-        hint: 'Start Chrome with the BrowserMCP extension loaded, then retry.',
-      });
+    // A broker only exists while the extension holds its native port open. When
+    // Chrome restarts the host, the state file briefly points at a dead port; wait
+    // for the new one instead of failing the whole session on a stale read.
+    const deadline = Date.now() + (options.waitMs ?? 20_000);
+    let lastError: unknown = null;
+    for (;;) {
+      if (fs.existsSync(options.stateFile)) {
+        try {
+          const { port, token } = JSON.parse(fs.readFileSync(options.stateFile, 'utf8')) as {
+            port: number;
+            token: string;
+          };
+          const socket = await new Promise<net.Socket>((resolve, reject) => {
+            const conn = net.createConnection({ host: '127.0.0.1', port }, () => resolve(conn));
+            conn.once('error', reject);
+          });
+          const client = new BrokerClient(socket);
+          // First frame authorises the connection.
+          socket.write(encodeFrame({ id: 0, method: 'auth', token }));
+          return client;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (Date.now() >= deadline) {
+        throw new ActionError('E_BROWSER_DISCONNECTED', `no live broker at ${options.stateFile}`, {
+          hint: 'Start Chrome with the BrowserMCP extension loaded; it reconnects within a few seconds.',
+          cause: lastError,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    const { port, token } = JSON.parse(fs.readFileSync(options.stateFile, 'utf8')) as { port: number; token: string };
-    const socket = await new Promise<net.Socket>((resolve, reject) => {
-      const conn = net.createConnection({ host: '127.0.0.1', port }, () => resolve(conn));
-      conn.once('error', reject);
-    });
-    const client = new BrokerClient(socket);
-    // First frame authorises the connection.
-    socket.write(encodeFrame({ id: 0, method: 'auth', token }));
-    return client;
   }
 
   on(listener: (event: BrokerEvent) => void): void {
@@ -126,6 +146,9 @@ export class ExtensionPage implements RuntimePage {
       }
     });
     void this.enableDomains();
+    // Traffic before the first navigation still counts: network_read and recon read
+    // this feed, and an agent often attaches to a page that is already open.
+    this.ensureJournal();
   }
 
   private async enableDomains(): Promise<void> {

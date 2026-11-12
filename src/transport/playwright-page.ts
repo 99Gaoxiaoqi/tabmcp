@@ -31,7 +31,9 @@ export class PlaywrightPage implements RuntimePage {
   private retentionState: Retention = null;
 
   constructor(private readonly page: Page) {
+    // Record traffic from the start: a later network_read must see what already happened.
     this.id = `pw-${Math.random().toString(16).slice(2, 10)}`;
+    void this.ensureJournal();
   }
 
   get raw(): Page {
