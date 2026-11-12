@@ -71,6 +71,8 @@ export interface GotoResult {
   url: string;
   title: string;
   status: number | null;
+  /** Present only when the page loaded but has no usable content. */
+  content?: 'empty' | 'placeholder';
 }
 
 export interface ObserveResult {
@@ -166,11 +168,22 @@ export class Tab {
     await installActivity(this.page);
     await settle(source, started, options.settleMs ?? 1200, this.tuning);
     this.refs = new RefRegistry();
+    // A page can load cleanly and still be empty: a blocked request or a redirect
+    // leaves a title and nothing else. Say that instead of reporting success.
+    // The check retries once because it can land between commit and first paint.
+    let content: 'ready' | 'empty' | 'placeholder' | 'unknown' =
+      waitUntil === 'none' ? 'unknown' : await this.page.contentState().catch(() => 'unknown' as const);
+    if (content === 'empty') {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const retry = await this.page.contentState().catch(() => 'unknown' as const);
+      if (retry !== 'empty') content = retry;
+    }
     return {
       ok: true,
       url: await this.page.url().catch(() => url),
       title: await this.page.title().catch(() => ''),
       status,
+      ...(content === 'empty' || content === 'placeholder' ? { content } : {}),
     };
   }
 

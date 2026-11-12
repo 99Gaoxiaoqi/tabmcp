@@ -208,7 +208,7 @@ export function createServer(context: ServerContext): McpServer {
             hint: 'Call docs_get without a name to list them.',
           });
         }
-        return { content: [text(`# ${doc.title}\n\n${doc.body}`)] };
+        return { content: [text(doc.body.startsWith("#") ? doc.body : `# ${doc.title}\n\n${doc.body}`)] };
       }),
   );
 
@@ -640,7 +640,7 @@ export function createServer(context: ServerContext): McpServer {
     async (uri, variables) => {
       const name = String((variables as { name?: string }).name ?? '');
       const doc = getDoc(name) ?? DOCS[0]!;
-      return { contents: [{ uri: uri.href, text: `# ${doc.title}\n\n${doc.body}` }] };
+      return { contents: [{ uri: uri.href, text: doc.body.startsWith("#") ? doc.body : `# ${doc.title}\n\n${doc.body}` }] };
     },
   );
 

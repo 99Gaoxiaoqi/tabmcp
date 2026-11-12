@@ -133,7 +133,8 @@ export const CONTENT_STATE_SCRIPT = `(() => {
   if (text.length === 0) return 'empty';
   const LOADING = /(^|\\s)(loading|请稍候|加载中|正在加载)(\\s|$)/i;
   if (text.length < 80 && LOADING.test(text)) return 'placeholder';
+  // A single heading is content. Only truly blank pages count as empty.
   const nodes = document.body ? document.body.querySelectorAll('*').length : 0;
-  if (nodes < 3 && text.length < 40) return 'empty';
+  if (nodes === 0) return 'empty';
   return 'ready';
 })()`;

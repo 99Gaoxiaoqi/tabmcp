@@ -48,23 +48,37 @@ export class CdpSession implements BrowserSession {
     return new CdpSession(browser, context, pages[pages.length - 1] ?? null);
   }
 
+  private readonly wrappers = new WeakMap<Page, PlaywrightPage>();
+
+  /**
+   * One wrapper per underlying page. Session state lives on the wrapper (journal,
+   * refs), so handing out a fresh wrapper would silently reset it mid-session.
+   */
+  private wrap(page: Page): PlaywrightPage {
+    const existing = this.wrappers.get(page);
+    if (existing) return existing;
+    const created = new PlaywrightPage(page);
+    this.wrappers.set(page, created);
+    return created;
+  }
+
   async pages(): Promise<RuntimePage[]> {
-    return this.context.pages().map((page) => new PlaywrightPage(page));
+    return this.context.pages().map((page) => this.wrap(page));
   }
 
   async activePage(): Promise<RuntimePage> {
-    if (this.preferred && !this.preferred.isClosed()) return new PlaywrightPage(this.preferred);
+    if (this.preferred && !this.preferred.isClosed()) return this.wrap(this.preferred);
     const pages = this.context.pages().filter((p) => !p.isClosed());
     const last = pages[pages.length - 1];
     if (!last) throw new Error('no page available');
     this.preferred = last;
-    return new PlaywrightPage(last);
+    return this.wrap(last);
   }
 
   async newPage(): Promise<RuntimePage> {
     const page = await this.context.newPage();
     this.preferred = page;
-    const wrapped = new PlaywrightPage(page);
+    const wrapped = this.wrap(page);
     this.owned.push(wrapped);
     return wrapped;
   }

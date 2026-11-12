@@ -52,6 +52,9 @@ export class PlaywrightPage implements RuntimePage {
     url: string,
     options: { timeoutMs: number; waitUntil: 'load' | 'domcontentloaded' | 'commit' },
   ): Promise<NavigationResult> {
+    // Attach capture before the request leaves, otherwise the very navigation we
+    // are recording is the one the journal misses.
+    await this.ensureJournal();
     const response = await this.page.goto(url, { waitUntil: options.waitUntil, timeout: options.timeoutMs });
     return { url: this.page.url(), status: response ? response.status() : null };
   }
@@ -134,15 +137,17 @@ export class PlaywrightPage implements RuntimePage {
   }
 
   async reload(): Promise<void> {
-    await this.page.reload({ waitUntil: 'load' }).catch(() => undefined);
+    // `load` never fires on a bfcache restore, so waiting for it burns the whole
+    // timeout. Commit plus a short bound keeps reload fast and still honest.
+    await this.page.reload({ waitUntil: 'commit', timeout: 10_000 }).catch(() => undefined);
   }
 
   async back(): Promise<void> {
-    await this.page.goBack({ waitUntil: 'load' }).catch(() => null);
+    await this.page.goBack({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
   }
 
   async forward(): Promise<void> {
-    await this.page.goForward({ waitUntil: 'load' }).catch(() => null);
+    await this.page.goForward({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
   }
 
   async cookies(domain: string): Promise<Array<{ name: string; value: string; domain: string; path?: string }>> {
@@ -194,31 +199,36 @@ export class PlaywrightPage implements RuntimePage {
   private async ensureJournal(): Promise<void> {
     if (this.journalAttached) return;
     this.journalAttached = true;
-    try {
-      const session = await this.page.context().newCDPSession(this.page);
-      await session.send('Network.enable');
-      session.on('Network.requestWillBeSent', (event) => {
-        this.journal.requestStarted(event.requestId, event.request.method, event.request.url);
-      });
-      session.on('Network.responseReceived', async (event) => {
-        const mimeType = event.response.mimeType;
-        if (!/json|text\/plain/i.test(mimeType)) return;
+    // Playwright already tracks responses and can read their bodies; going through
+    // CDP as well only adds a second way to fail.
+    this.page.on('request', (request) => {
+      const id = `r${++this.requestSeq}`;
+      this.requestIds.set(request, id);
+      this.journal.requestStarted(id, request.method(), request.url());
+    });
+    this.page.on('response', (response) => {
+      void (async () => {
+        const contentType = response.headers()['content-type'] ?? '';
+        if (!/json|text\/plain/i.test(contentType)) return;
+        const request = response.request();
+        const id = this.requestIds.get(request);
+        if (!id) return;
         try {
-          const body = (await session.send('Network.getResponseBody', { requestId: event.requestId })) as {
-            body: string;
-            base64Encoded: boolean;
-          };
-          const text = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf8') : body.body;
-          this.journal.record(event.requestId, event.response.status, mimeType, text);
+          const text = await response.text();
+          this.journal.record(id, response.status(), contentType, text);
         } catch {
-          // Body already evicted or not retrievable; drop the entry.
+          // Redirects and evicted bodies cannot be read; drop the entry.
         }
-      });
-      session.on('Network.loadingFailed', (event) => this.journal.requestFinished(event.requestId));
-    } catch {
-      this.journalAttached = false;
-    }
+      })();
+    });
+    this.page.on('requestfailed', (request) => {
+      const id = this.requestIds.get(request);
+      if (id) this.journal.requestFinished(id);
+    });
   }
+
+  private requestSeq = 0;
+  private readonly requestIds = new WeakMap<object, string>();
 
   async markDeliverable(): Promise<void> {
     this.retentionState = 'deliverable';

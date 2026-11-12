@@ -170,6 +170,8 @@ export class ExtensionPage implements RuntimePage {
     url: string,
     options: { timeoutMs: number; waitUntil: 'load' | 'domcontentloaded' | 'commit' },
   ): Promise<NavigationResult> {
+    // Capture must be attached before the navigation, or the journal misses it.
+    this.ensureJournal();
     const result = await this.send<{ frameId?: string; errorText?: string }>('Page.navigate', { url });
     if (result.errorText) throw new Error(result.errorText);
     if (options.waitUntil !== 'commit') {

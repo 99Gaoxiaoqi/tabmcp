@@ -42,12 +42,26 @@ test('MCP server exposes the five browser tools', async (t) => {
   try {
     const tools = await client.listTools();
     const names = tools.tools.map((tool) => tool.name).sort();
+    // The tool list is the contract: new tools must be added here deliberately.
     assert.deepEqual(names, [
       'browser_act',
+      'browser_cookies',
+      'browser_download',
       'browser_goto',
+      'browser_navigate',
+      'browser_network_read',
       'browser_observe',
       'browser_read',
       'browser_screenshot',
+      'docs_get',
+      'doctor',
+      'js',
+      'js_reset',
+      'recon_draft',
+      'recon_report',
+      'recon_start',
+      'site_run',
+      'sites_search',
     ]);
 
     // A tool call over the real protocol, not just a listing.
