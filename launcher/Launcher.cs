@@ -8,7 +8,7 @@
 // Nothing here may hard-code a machine path: the same binary has to work on any
 // checkout. Resolution order for both values:
 //   1. command line:  native-host.exe <node.exe> <native.js>
-//   2. environment:   BMCP_NODE / BMCP_HOST_SCRIPT
+//   2. environment:   TABMCP_NODE / TABMCP_HOST_SCRIPT
 //   3. layout:        <launcher dir>\dist\src\host\native.js, node from PATH
 
 using System;
@@ -22,7 +22,7 @@ internal static class Launcher
         var script = ResolveScript(args);
         if (script == null)
         {
-            Console.Error.WriteLine("launcher: native.js not found. Set BMCP_HOST_SCRIPT or pass it as the second argument.");
+            Console.Error.WriteLine("launcher: native.js not found. Set TABMCP_HOST_SCRIPT or pass it as the second argument.");
             return 2;
         }
 
@@ -87,7 +87,7 @@ internal static class Launcher
     {
         if (args.Length > 1 && File.Exists(args[1])) return Path.GetFullPath(args[1]);
 
-        var fromEnv = Environment.GetEnvironmentVariable("BMCP_HOST_SCRIPT");
+        var fromEnv = Environment.GetEnvironmentVariable("TABMCP_HOST_SCRIPT");
         if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv)) return Path.GetFullPath(fromEnv);
 
         var launcherDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
@@ -101,7 +101,7 @@ internal static class Launcher
     {
         if (args.Length > 0 && File.Exists(args[0])) return Path.GetFullPath(args[0]);
 
-        var fromEnv = Environment.GetEnvironmentVariable("BMCP_NODE");
+        var fromEnv = Environment.GetEnvironmentVariable("TABMCP_NODE");
         if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv)) return Path.GetFullPath(fromEnv);
 
         // "node" lets Windows resolve it through PATH, which is what a normal

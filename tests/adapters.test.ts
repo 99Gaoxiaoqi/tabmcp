@@ -43,7 +43,7 @@ test('coerceArgs: required, unknown, types and choices', () => {
 });
 
 test('loader: discovers adapters, skips underscore helpers, reports broken files', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-adapters-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-adapters-'));
   const userDir = path.join(root, 'adapters');
   fs.mkdirSync(path.join(userDir, 'demo'), { recursive: true });
   fs.writeFileSync(
@@ -113,7 +113,7 @@ test('checkExpectation: minRows and text', () => {
 });
 
 test('drafts: activation is refused until verified', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-drafts-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-drafts-'));
   const store = new DraftStore(path.join(root, 'drafts'), path.join(root, 'adapters'));
   const draft = store.create({
     site: 'demo',

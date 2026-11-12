@@ -12,7 +12,7 @@ import { Broker, DuplicateHostError, StdioExtensionLink } from './broker.js';
 import type { HostRequest } from '../protocol.js';
 
 function log(message: string): void {
-  process.stderr.write(`[browsermcp-host] ${message}\n`);
+  process.stderr.write(`[tabmcp-host] ${message}\n`);
 }
 
 async function main(): Promise<void> {

@@ -46,7 +46,7 @@ export interface ActivitySource {
  * navigation is detectable by comparing snapshots.
  */
 const OBSERVER_SCRIPT = `(() => {
-  const KEY = '__bmcp_activity__';
+  const KEY = '__tabmcp_activity__';
   const existing = window[KEY];
   if (existing) return true;
 
@@ -96,19 +96,19 @@ const OBSERVER_SCRIPT = `(() => {
     state.shadowScan = true;
     const proto = Element.prototype;
     const original = proto.attachShadow;
-    if (original && !original.__bmcp_patched) {
+    if (original && !original.__tabmcp_patched) {
       const patched = function (init) {
         const root = original.call(this, init);
         try { watchRoot(root); } catch (e) {}
         return root;
       };
-      patched.__bmcp_patched = true;
+      patched.__tabmcp_patched = true;
       proto.attachShadow = patched;
     }
     scanShadow();
   };
 
-  window.__bmcp_scan_shadow__ = enableScan;
+  window.__tabmcp_scan_shadow__ = enableScan;
   return true;
 })()`;
 
@@ -120,9 +120,9 @@ export async function readActivityInPage(probe: ScriptProbe, scan: boolean): Pro
   try {
     return await probe.evaluate<ActivityInfo | null>(`(() => {
       const w = window;
-      const state = w['__bmcp_activity__'];
+      const state = w['__tabmcp_activity__'];
       if (!state) return null;
-      if (${scan ? 'true' : 'false'} && typeof w['__bmcp_scan_shadow__'] === 'function') w['__bmcp_scan_shadow__']();
+      if (${scan ? 'true' : 'false'} && typeof w['__tabmcp_scan_shadow__'] === 'function') w['__tabmcp_scan_shadow__']();
       return {
         docId: state.docId,
         url: location.href,

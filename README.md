@@ -1,19 +1,12 @@
-# browsermcp-core
-
-> **Independent implementation.** This project is not affiliated with
-> [`jackwener/BrowserMCP`](https://github.com/jackwener/BrowserMCP) or the `BrowserMCP`
-> organisation. No source code was copied from either. The public behaviour of the
-> reference project was studied to align tool shapes and failure modes; the
-> implementation here was written from scratch. If any fragment turns out to be a
-> recognizable derivative, it will be attributed in `NOTICE`.
+# tabmcp
 
 
-Behavior-aligned, independently written browser MCP core.
+An MCP server that drives a real browser tab: observe, act, read, and record what the page fetches.
 
 Five tools over MCP stdio — `browser_goto`, `browser_observe`, `browser_act`,
 `browser_read`, `browser_screenshot` — backed by Playwright's CDP connection.
 
-No code from BrowserMCP is copied. The behaviors that make it feel responsive
+No code from TabMCP is copied. The behaviors that make it feel responsive
 are reproduced from a written spec:
 
 | Behavior | Where | Rule |
@@ -43,7 +36,7 @@ MCP client config:
 ```json
 {
   "mcpServers": {
-    "browsermcp-core": {
+    "tabmcp": {
       "command": "node",
       "args": ["<absolute-path-to>/dist/src/main.js", "--connect", "http://127.0.0.1:9222"]
     }
@@ -147,7 +140,7 @@ Calibrated defaults (were guesses): `quietMs 120`, `notFoundQuietMs 700`,
 `list`/`listitem` are no longer emitted as structure nodes — they were 138 of 635 nodes
 and carried no navigating value.
 
-## Aligned with BrowserMCP's timing model (2026-11-12)
+## Aligned with TabMCP's timing model (2026-11-12)
 
 The slow path was structural, not a constant: navigation watching and settling ran one
 after the other, and a second wider pass was added when the first window expired. That
@@ -199,12 +192,12 @@ machine without a browser on `BROWSER_ENDPOINT` it now:
 and the error envelope without any browser, so the MCP layer is never untested just
 because Chrome is not running.
 
-## Site adapters (BrowserMCP-compatible shape)
+## Site adapters (TabMCP-compatible shape)
 
 An adapter is data plus one function; the data becomes the MCP tool schema.
 
 ```js
-// %APPDATA%/browsermcp-core/adapters/demo/list.js
+// %APPDATA%/tabmcp/adapters/demo/list.js
 export default {
   description: 'List entries on the demo site',
   access: 'read',

@@ -37,11 +37,11 @@ class FakePage implements RuntimePage {
 
   async evaluate<T = unknown>(script: string, _options?: EvaluateOptions): Promise<T> {
     // The activity probe: a quiet, complete document.
-    if (script.includes('__bmcp_activity__')) {
+    if (script.includes('__tabmcp_activity__')) {
       return { docId: 'doc-fake', url: this.currentUrl, ready: 'complete', mutations: 5, idleMs: 400 } as unknown as T;
     }
     // Snapshot collection: one interactive button.
-    if (script.includes('IMPLICIT_ACTION') || script.includes('data-bmcp-ref')) {
+    if (script.includes('IMPLICIT_ACTION') || script.includes('data-tabmcp-ref')) {
       return {
         nodes: [{ ref: 'eabcdef1234_1', role: 'button', name: 'Go', kind: 'action' }],
         total: 1,

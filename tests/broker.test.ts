@@ -85,7 +85,7 @@ async function connectClient(port: number, token: string): Promise<Client> {
 }
 
 test('broker: handshake, tab listing, cdp relay and event fan-out', async () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-broker-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-broker-'));
   const broker = new Broker({ stateDir });
   const { port, token } = await broker.start();
   const extension = new FakeExtension();
@@ -121,7 +121,7 @@ test('broker: handshake, tab listing, cdp relay and event fan-out', async () => 
 });
 
 test('broker: rejects a client with a wrong token', async () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-broker-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-broker-'));
   const broker = new Broker({ stateDir });
   const { port } = await broker.start();
   broker.attachExtension(new FakeExtension());
@@ -140,7 +140,7 @@ test('broker: rejects a client with a wrong token', async () => {
 });
 
 test('broker: reports missing extension instead of hanging', async () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-broker-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-broker-'));
   const broker = new Broker({ stateDir });
   const { port, token } = await broker.start();
   const client = await connectClient(port, token);
@@ -152,7 +152,7 @@ test('broker: reports missing extension instead of hanging', async () => {
 
 
 test('broker: two sessions cannot interleave work on the same tab', async () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-broker-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-broker-'));
   const broker = new Broker({ stateDir });
   const { port, token } = await broker.start();
 
@@ -197,7 +197,7 @@ test('broker: two sessions cannot interleave work on the same tab', async () => 
 });
 
 test('broker: different tabs still run in parallel', async () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-broker-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-broker-'));
   const broker = new Broker({ stateDir });
   const { port, token } = await broker.start();
   let active = 0;

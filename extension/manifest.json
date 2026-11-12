@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Browser MCP Core Connector",
+  "name": "TabMCP Connector",
   "version": "0.1.1",
   "description": "Bridges browser tabs to a local MCP host over native messaging.",
   "minimum_chrome_version": "116",
@@ -21,7 +21,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Browser MCP Core"
+    "default_title": "TabMCP Core"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoO3r4dvmOAcEYoaxlpcgrWuv+qtMVxue1oHnJ1BJjXDnSoA3vKKt88TWM9Oz6kMKTlIF5moEBVdXGGyDk7NuvdYe3nBIaLN2fW4AmwCxpF+heFLv7HkxEocb2QRLXpCQxevjTyP7VEOXTPZ5WKevRU5utTC3b9CZ/Q7CCYgxXf8VdDECkL+N5GxqRYoIsDIbGs6W9vsvSScuXamLjr2shrQtAkjHlYSnA9WLDnilg/GIAIw2r/Dfsp4JaxkCLwuR+cJmL5nqMiE74ZEL8331J9nz/r4hrV1fuKKLpev9WMavUCpZcLk8Z3AoLYTrcrLuYM18vyJjr8uu+ZTDwBrcqwIDAQAB"
 }

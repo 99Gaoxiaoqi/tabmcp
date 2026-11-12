@@ -2,7 +2,7 @@
  * Install the extension + native host.
  *
  * Writes the native messaging host manifest and the registry key Chrome reads
- * on Windows, so `chrome.runtime.connectNative('com.local.browsermcp_core')`
+ * on Windows, so `chrome.runtime.connectNative('com.local.tabmcp')`
  * can find our host process.
  */
 
@@ -30,10 +30,11 @@ export function hostName(): string {
       // try the next location
     }
   }
-  return 'com.local.browsermcp_core';
+  return 'com.local.tabmcp';
 }
 
 export const HOST_NAME = hostName();
+
 
 export interface InstallOptions {
   /** Absolute path to the extension directory (contains manifest.json). */
@@ -52,7 +53,7 @@ export interface InstallResult {
 }
 
 function hostManifestPath(): string {
-  const base = path.join(os.homedir(), 'AppData', 'Local', 'browsermcp-core');
+  const base = path.join(os.homedir(), 'AppData', 'Local', 'tabmcp');
   fs.mkdirSync(base, { recursive: true });
   return path.join(base, `${HOST_NAME}.json`);
 }
@@ -61,10 +62,9 @@ export function install(options: InstallOptions): InstallResult {
   const node = options.nodePath ?? process.execPath;
   const manifest = {
     name: HOST_NAME,
-    description: 'Browser MCP core host',
+    description: 'TabMCP host',
     path: node,
     type: 'stdio',
-    args: [options.hostScript],
     allowed_origins: [`chrome-extension://${options.extensionId}/`],
   };
   const manifestPath = hostManifestPath();

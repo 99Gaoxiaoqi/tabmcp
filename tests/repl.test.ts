@@ -112,7 +112,7 @@ test('truncates large values instead of flooding the caller', async () => {
 });
 
 test('persists JSON-safe bindings and restores them in a new session', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-repl-state-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-repl-state-'));
   const statePath = path.join(dir, 'state.json');
 
   const first = new JsSession({}, { statePath });
@@ -125,7 +125,7 @@ test('persists JSON-safe bindings and restores them in a new session', async () 
 });
 
 test('drops values that cannot survive JSON', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-repl-state-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-repl-state-'));
   const statePath = path.join(dir, 'state.json');
 
   const first = new JsSession({}, { statePath });
@@ -138,7 +138,7 @@ test('drops values that cannot survive JSON', async () => {
 });
 
 test('a corrupt state file does not stop the session', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmcp-repl-state-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabmcp-repl-state-'));
   const statePath = path.join(dir, 'state.json');
   fs.writeFileSync(statePath, '{not json', 'utf8');
   const session = new JsSession({}, { statePath });

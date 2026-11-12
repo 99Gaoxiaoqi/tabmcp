@@ -53,7 +53,7 @@ export class Broker {
 
   constructor(private readonly options: BrokerOptions = {}) {
     this.log = options.onLog ?? (() => undefined);
-    const dir = options.stateDir ?? path.join(os.tmpdir(), 'browsermcp-core');
+    const dir = options.stateDir ?? path.join(os.tmpdir(), 'tabmcp');
     fs.mkdirSync(dir, { recursive: true });
     this.stateFile = path.join(dir, 'broker.json');
   }
@@ -119,7 +119,7 @@ export class Broker {
   /** Forwards one request to the extension, correlating by id and enforcing a timeout. */
   async call(request: HostRequest, timeoutMs = 30_000): Promise<unknown> {
     if (!this.link) throw new ActionError('E_BROWSER_DISCONNECTED', 'extension not connected', {
-      hint: 'Open Chrome with the BrowserMCP extension loaded; it reconnects within a few seconds.',
+      hint: 'Open Chrome with the TabMCP extension loaded; it reconnects within a few seconds.',
     });
     return this.link.request(request, timeoutMs);
   }
@@ -157,6 +157,7 @@ export class Broker {
     fs.rmSync(this.stateFile, { force: true });
   }
 
+  /** True only when another broker answers a request, not merely accepts a socket. */
   private async anotherHostIsLive(): Promise<boolean> {
     if (!fs.existsSync(this.stateFile)) return false;
     let port = 0;
@@ -168,13 +169,24 @@ export class Broker {
     }
     if (!port) return false;
     return await new Promise<boolean>((resolve) => {
+      let answered = false;
       const socket = net.createConnection({ host: '127.0.0.1', port }, () => {
+        // A live broker answers 'tabs' (possibly with an error). A socket left over
+        // from a dead extension accepts the connection and never replies — that is a
+        // stale port, and taking it over is the only way out.
+        const payload = Buffer.from(JSON.stringify({ id: 1, method: 'tabs', params: {} }), 'utf8');
+        const header = Buffer.allocUnsafe(4);
+        header.writeUInt32LE(payload.length, 0);
+        socket.write(Buffer.concat([header, payload]));
+      });
+      socket.on('data', () => {
+        answered = true;
         socket.destroy();
         resolve(true);
       });
-      socket.setTimeout(400, () => {
+      socket.setTimeout(700, () => {
         socket.destroy();
-        resolve(false);
+        resolve(answered);
       });
       socket.once('error', () => resolve(false));
     });

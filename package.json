@@ -1,20 +1,20 @@
 {
-  "name": "@local/browsermcp-core",
+  "name": "@local/tabmcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Behavior-aligned rebuild of a browser MCP core: event-based settle, opaque refs, ARIA snapshots.",
+  "description": "MCP server that drives a real browser tab: ARIA snapshots, opaque refs, adapters and a REPL.",
   "engines": {
     "node": ">=22"
   },
   "bin": {
-    "browsermcp-core": "dist/src/main.js"
+    "tabmcp": "dist/src/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/tests/*.test.js",
-    "verify": "node scripts/generate-host-config.mjs --check && node scripts/leak-scan.mjs && npm run typecheck && npm run build && npm test",
+    "verify": "node scripts/generate-host-config.mjs --check && node scripts/leak-scan.mjs && node scripts/name-check.mjs && npm run typecheck && npm run build && npm test",
     "setup:extension": "node scripts/generate-host-config.mjs && node scripts/setup-extension.mjs"
   },
   "dependencies": {

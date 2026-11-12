@@ -7,11 +7,11 @@
  * the text tools use.
  */
 
-export const ANNOTATE_CSS_ID = '__bmcp_annotations';
+export const ANNOTATE_CSS_ID = '__tabmcp_annotations';
 
 /** Injected before the capture; returns how many elements were marked. */
 export const ANNOTATE_SCRIPT = `(() => {
-  const HOST = '__bmcp_annotations';
+  const HOST = '__tabmcp_annotations';
   const existing = document.getElementById(HOST);
   if (existing) existing.remove();
 
@@ -19,7 +19,7 @@ export const ANNOTATE_SCRIPT = `(() => {
   layer.id = HOST;
   layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
 
-  const targets = Array.from(document.querySelectorAll('[data-bmcp-ref]'));
+  const targets = Array.from(document.querySelectorAll('[data-tabmcp-ref]'));
   let n = 0;
   for (const el of targets) {
     const rect = el.getBoundingClientRect();
@@ -38,7 +38,7 @@ export const ANNOTATE_SCRIPT = `(() => {
       'box-sizing:border-box',
     ].join(';');
     const label = document.createElement('span');
-    const ref = el.getAttribute('data-bmcp-ref') || '';
+    const ref = el.getAttribute('data-tabmcp-ref') || '';
     const short = ref.split('_')[1] || String(n);
     label.textContent = short;
     label.style.cssText = [

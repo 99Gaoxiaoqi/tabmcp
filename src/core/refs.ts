@@ -7,7 +7,7 @@
  * detectable instead of silently acting on whatever is now in that position.
  */
 
-export const REF_ATTRIBUTE = 'data-bmcp-ref';
+export const REF_ATTRIBUTE = 'data-tabmcp-ref';
 
 const GENERATION_HEX = 10;
 

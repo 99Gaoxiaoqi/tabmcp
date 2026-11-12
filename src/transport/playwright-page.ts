@@ -309,7 +309,7 @@ export class PlaywrightPage implements RuntimePage {
         if (spec.text && !clean(el.textContent).toLowerCase().includes(String(spec.text).toLowerCase())) continue;
         const r = el.getBoundingClientRect();
         if (r.width < 1 || r.height < 1) continue;
-        const ref = el.getAttribute('data-bmcp-ref');
+        const ref = el.getAttribute('data-tabmcp-ref');
         if (!ref) continue;
         out.push({ ref, role: roleOf(el), name, value: el.value || undefined });
       }

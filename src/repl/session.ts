@@ -95,7 +95,7 @@ function looksLikeDeclaration(candidate: string): boolean {
 function compilesAsExpression(candidate: string): boolean {
   try {
     // Wrapped in an async function so `await` is legal here too; it is only compiled.
-    new vm.Script(`(async () => (${candidate}))`, { filename: 'browsermcp-repl-probe.js' });
+    new vm.Script(`(async () => (${candidate}))`, { filename: 'tabmcp-repl-probe.js' });
     return true;
   } catch {
     return false;
@@ -208,8 +208,8 @@ export class JsSession {
       AbortSignal,
       fetch,
     };
-    const context = vm.createContext(sandbox, { name: 'browsermcp-repl' });
-    vm.runInContext('globalThis.global = globalThis;', context, { filename: 'browsermcp-repl-bootstrap.js' });
+    const context = vm.createContext(sandbox, { name: 'tabmcp-repl' });
+    vm.runInContext('globalThis.global = globalThis;', context, { filename: 'tabmcp-repl-bootstrap.js' });
     return context;
   }
 
@@ -247,7 +247,7 @@ export class JsSession {
 
     let value: unknown;
     try {
-      const script = new vm.Script(wrapped, { filename: 'browsermcp-repl.js' });
+      const script = new vm.Script(wrapped, { filename: 'tabmcp-repl.js' });
       const pending = script.runInContext(this.context, { timeout: timeoutMs }) as Promise<{
         __expr: unknown;
         __decls: Declarations;

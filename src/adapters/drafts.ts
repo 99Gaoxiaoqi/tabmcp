@@ -31,7 +31,7 @@ export interface DraftRecord {
 }
 
 export function defaultDraftDir(): string {
-  const base = process.env.BROWSERMCP_HOME ?? path.join(os.homedir(), 'AppData', 'Roaming', 'browsermcp-core');
+  const base = process.env.TABMCP_HOME ?? path.join(os.homedir(), 'AppData', 'Roaming', 'tabmcp');
   return path.join(base, 'adapter-drafts');
 }
 

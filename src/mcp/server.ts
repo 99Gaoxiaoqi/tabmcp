@@ -36,7 +36,7 @@ function text(value: unknown): { type: 'text'; text: string } {
 
 export function createServer(context: ServerContext): McpServer {
   const server = new McpServer(
-    { name: 'browsermcp-core', version: '0.1.0' },
+    { name: 'tabmcp', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
@@ -281,7 +281,7 @@ export function createServer(context: ServerContext): McpServer {
       run(async () => {
         try {
           const tab = await tabFor();
-          const target = selector ?? (ref ? `[data-bmcp-ref="${ref}"]` : undefined);
+          const target = selector ?? (ref ? `[data-tabmcp-ref="${ref}"]` : undefined);
           if (!target) {
             throw new ActionError('E_BAD_ARGUMENT', 'pass ref or selector', { hint: 'Call browser_observe to get a ref.' });
           }
@@ -641,8 +641,8 @@ export function createServer(context: ServerContext): McpServer {
   // resources directly, others only call tools.
   server.registerResource(
     'docs',
-    new ResourceTemplate('browsermcp://docs/{name}', {
-      list: async () => ({ resources: listDocs().map((doc) => ({ uri: `browsermcp://docs/${doc.name}`, name: doc.name, title: doc.title, description: doc.summary })) }),
+    new ResourceTemplate('tabmcp://docs/{name}', {
+      list: async () => ({ resources: listDocs().map((doc) => ({ uri: `tabmcp://docs/${doc.name}`, name: doc.name, title: doc.title, description: doc.summary })) }),
     }),
     { title: 'Documentation', description: 'How to use the tools and write adapters' },
     async (uri, variables) => {
@@ -685,7 +685,7 @@ export function createServer(context: ServerContext): McpServer {
           role: 'user',
           content: {
             type: 'text',
-            text: `Site: ${site}\nGoal: ${goal}\n\n1. recon_start, drive the flow, recon_report.\n2. Confirm the endpoint with tab.fetchJson in the REPL.\n3. recon_draft for the skeleton, then fill the argument meanings and result mapping.\n4. Save it under %APPDATA%/browsermcp-core/adapters/${site}/, verify with an expectation, and only then activate.`,
+            text: `Site: ${site}\nGoal: ${goal}\n\n1. recon_start, drive the flow, recon_report.\n2. Confirm the endpoint with tab.fetchJson in the REPL.\n3. recon_draft for the skeleton, then fill the argument meanings and result mapping.\n4. Save it under %APPDATA%/tabmcp/adapters/${site}/, verify with an expectation, and only then activate.`,
           },
         },
       ],

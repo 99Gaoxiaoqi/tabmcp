@@ -3,7 +3,7 @@
  *
  * An agent that can read a short, accurate doc is far less likely to misuse the
  * tools than one that has to infer behaviour from schemas alone. These are served
- * both as a tool (`docs_get`) and as MCP resources (`browsermcp://docs/...`).
+ * both as a tool (`docs_get`) and as MCP resources (`tabmcp://docs/...`).
  */
 
 export interface DocEntry {
@@ -30,7 +30,7 @@ calls, so filtering and mapping happen in one place instead of across many tool 
 
 const ADAPTERS = `# Adapters
 
-An adapter is one file: \`%APPDATA%/browsermcp-core/adapters/<site>/<command>.js\`.
+An adapter is one file: \`%APPDATA%/tabmcp/adapters/<site>/<command>.js\`.
 
 \`\`\`js
 export default {

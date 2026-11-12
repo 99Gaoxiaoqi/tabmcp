@@ -55,7 +55,7 @@ function connect() {
   try {
     port = chrome.runtime.connectNative(HOST_NAME);
   } catch (err) {
-    console.error('[bmcp] connectNative failed', err);
+    console.error('[tabmcp] connectNative failed', err);
     port = null;
     return;
   }
@@ -64,7 +64,7 @@ function connect() {
   });
   port.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError;
-    if (error) console.warn('[bmcp] native port closed:', error.message);
+    if (error) console.warn('[tabmcp] native port closed:', error.message);
     port = null;
     attached.clear();
     // Reconnect on our own: waiting for the 30s keepalive alarm means every call
@@ -86,7 +86,7 @@ connect();
 
 // Keep the worker warm while a debugger session is attached: MV3 idles out after
 // 30s, which would otherwise drop long agent operations.
-chrome.alarms.create('bmcp-keepalive', { periodInMinutes: 0.5 });
+chrome.alarms.create('tabmcp-keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(() => {
   ensurePort();
   if (attached.size > 0) void chrome.runtime.getPlatformInfo();
@@ -142,11 +142,11 @@ async function handleFromHost(message) {
         // Best-effort: grouping is unavailable on some Chrome builds and profiles.
         if (tab.id !== undefined) {
           try {
-            const existing = await chrome.tabGroups.query({ title: 'BrowserMCP' });
+            const existing = await chrome.tabGroups.query({ title: 'TabMCP' });
             const groupId = existing.length
               ? await chrome.tabs.group({ tabIds: [tab.id], groupId: existing[0].id })
               : await chrome.tabs.group({ tabIds: [tab.id] });
-            await chrome.tabGroups.update(groupId, { title: 'BrowserMCP', color: 'blue', collapsed: false });
+            await chrome.tabGroups.update(groupId, { title: 'TabMCP', color: 'blue', collapsed: false });
           } catch {
             /* cosmetic only */
           }

@@ -3,7 +3,7 @@
  *
  * Two sources, same shape:
  *   - built-ins shipped with this package (`adapters/`)
- *   - user adapters under `%APPDATA%/browsermcp-core/adapters/<site>/<command>.js`
+ *   - user adapters under `%APPDATA%/tabmcp/adapters/<site>/<command>.js`
  *
  * Files starting with `_` are shared helpers, not commands. A broken adapter is
  * reported with its file and problems instead of taking the whole list down.
@@ -41,7 +41,7 @@ export interface LoadOptions {
 }
 
 export function defaultUserAdapterDir(): string {
-  const base = process.env.BROWSERMCP_HOME ?? path.join(os.homedir(), 'AppData', 'Roaming', 'browsermcp-core');
+  const base = process.env.TABMCP_HOME ?? path.join(os.homedir(), 'AppData', 'Roaming', 'tabmcp');
   return path.join(base, 'adapters');
 }
 

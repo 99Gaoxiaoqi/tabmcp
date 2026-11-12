@@ -91,7 +91,7 @@ class BrokerClient {
       }
       if (Date.now() >= deadline) {
         throw new ActionError('E_BROWSER_DISCONNECTED', `no live broker at ${options.stateFile}`, {
-          hint: 'Start Chrome with the BrowserMCP extension loaded; it reconnects within a few seconds.',
+          hint: 'Start Chrome with the TabMCP extension loaded; it reconnects within a few seconds.',
           cause: lastError,
         });
       }
@@ -451,7 +451,7 @@ export class ExtensionPage implements RuntimePage {
         if (spec.text && !clean(el.textContent).toLowerCase().includes(String(spec.text).toLowerCase())) continue;
         const r = el.getBoundingClientRect();
         if (r.width < 1 || r.height < 1) continue;
-        const ref = el.getAttribute('data-bmcp-ref');
+        const ref = el.getAttribute('data-tabmcp-ref');
         if (!ref) continue;
         out.push({ ref, role: roleOf(el), name: name ? name : '', value: el.value || undefined });
       }
@@ -607,7 +607,7 @@ export class ExtensionPage implements RuntimePage {
     if (!target.frameId) throw new ActionError('E_TARGET_UNSUPPORTED', 'only index 0 is supported without a frameId');
     const world = await this.send<{ executionContextId: number }>('Page.createIsolatedWorld', {
       frameId: target.frameId,
-      worldName: 'browsermcp-frame',
+      worldName: 'tabmcp-frame',
     });
     const response = await this.send<{
       result?: { value?: unknown };

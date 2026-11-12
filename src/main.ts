@@ -121,8 +121,8 @@ const endpoint = args.connect ?? process.env.BROWSER_ENDPOINT ?? 'http://127.0.0
 async function openSession(): Promise<BrowserSession> {
   if (args.extension !== undefined) {
     const stateFile =
-      args.extension || (process.env.BMCP_BROKER_STATE ??
-        path.join(os.tmpdir(), 'browsermcp-core', 'broker.json'));
+      args.extension || (process.env.TABMCP_BROKER_STATE ??
+        path.join(os.tmpdir(), 'tabmcp', 'broker.json'));
     return ExtensionSession.connect(stateFile);
   }
   return CdpSession.connect({ endpoint });
