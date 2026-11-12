@@ -5,6 +5,7 @@
  * the surface and normalises errors so the API layer stays transport-agnostic.
  */
 
+import { ActionError } from '../core/errors.js';
 import type { Page } from 'playwright-core';
 import { ANNOTATE_SCRIPT, REMOVE_ANNOTATION_SCRIPT } from '../core/annotate.js';
 import { CONTENT_STATE_SCRIPT, NetworkJournal } from '../core/journal.js';
@@ -73,7 +74,7 @@ export class PlaywrightPage implements RuntimePage {
         ? frames[target.index]
         : frames.find((candidate) => candidate.name() === target.frameId);
     if (!frame) {
-      throw new Error(`frame not found (index ${target.index ?? '-'}, id ${target.frameId ?? '-'})`);
+      throw new ActionError('E_TARGET_NOT_FOUND', `frame not found (index ${target.index ?? '-'}, id ${target.frameId ?? '-'})`);
     }
     return frame.evaluate(script);
   }
@@ -164,7 +165,7 @@ export class PlaywrightPage implements RuntimePage {
     ]);
     const filePath = await download.path().catch(() => null);
     const failure = await download.failure();
-    if (failure) throw new Error(`download failed: ${failure}`);
+    if (failure) throw new ActionError('E_ACTION_FAILED', `download failed: ${failure}`);
     return {
       filename: download.suggestedFilename(),
       ...(filePath ? { path: filePath } : {}),
@@ -282,11 +283,11 @@ export class PlaywrightPage implements RuntimePage {
       }
     })()`);
     const parsed = JSON.parse(result) as { status: number; ok: boolean; text: string };
-    if (!parsed.ok) throw new Error(`fetch ${parsed.status}: ${parsed.text.slice(0, 300)}`);
+    if (!parsed.ok) throw new ActionError('E_ACTION_FAILED', `fetch ${parsed.status}: ${parsed.text.slice(0, 300)}`);
     try {
       return JSON.parse(parsed.text) as T;
     } catch {
-      throw new Error(`response is not JSON: ${parsed.text.slice(0, 300)}`);
+      throw new ActionError('E_ACTION_FAILED', `response is not JSON: ${parsed.text.slice(0, 300)}`);
     }
   }
 

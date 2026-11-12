@@ -64,7 +64,9 @@ class BrokerClient {
 
   static async connect(options: BrokerClientOptions): Promise<BrokerClient> {
     if (!fs.existsSync(options.stateFile)) {
-      throw new Error(`broker state file missing: ${options.stateFile} — is Chrome running with the extension?`);
+      throw new ActionError('E_BROWSER_DISCONNECTED', `broker state file missing: ${options.stateFile}`, {
+        hint: 'Start Chrome with the BrowserMCP extension loaded, then retry.',
+      });
     }
     const { port, token } = JSON.parse(fs.readFileSync(options.stateFile, 'utf8')) as { port: number; token: string };
     const socket = await new Promise<net.Socket>((resolve, reject) => {
@@ -163,7 +165,7 @@ export class ExtensionPage implements RuntimePage {
       exceptionDetails?: { text?: string; exception?: { description?: string } };
     }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise, userGesture: true });
     if (response.exceptionDetails) {
-      throw new Error(response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'evaluate failed');
+      throw new ActionError('E_ACTION_FAILED', response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'evaluate failed');
     }
     return response.result?.value as T;
   }
@@ -186,7 +188,7 @@ export class ExtensionPage implements RuntimePage {
     // observable on the document response, so subscribe before navigating.
     const statusPromise = this.waitForDocumentStatus(Math.min(options.timeoutMs, 8_000));
     const result = await this.send<{ frameId?: string; errorText?: string }>('Page.navigate', { url });
-    if (result.errorText) throw new Error(result.errorText);
+    if (result.errorText) throw new ActionError('E_ACTION_FAILED', result.errorText);
     if (options.waitUntil !== 'commit') {
       // "complete" never arrives while a request is still pending, and waiting the
       // full timeout blocked every later call behind the queue. Interactive is
@@ -402,11 +404,11 @@ export class ExtensionPage implements RuntimePage {
       }
     })()`);
     const parsed = JSON.parse(raw) as { status: number; ok: boolean; text: string };
-    if (!parsed.ok) throw new Error(`fetch ${parsed.status}: ${parsed.text.slice(0, 300)}`);
+    if (!parsed.ok) throw new ActionError('E_ACTION_FAILED', `fetch ${parsed.status}: ${parsed.text.slice(0, 300)}`);
     try {
       return JSON.parse(parsed.text) as T;
     } catch {
-      throw new Error(`response is not JSON: ${parsed.text.slice(0, 300)}`);
+      throw new ActionError('E_ACTION_FAILED', `response is not JSON: ${parsed.text.slice(0, 300)}`);
     }
   }
 
@@ -594,7 +596,7 @@ export class ExtensionPage implements RuntimePage {
       awaitPromise: true,
     });
     if (response.exceptionDetails) {
-      throw new Error(response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'frame evaluate failed');
+      throw new ActionError('E_ACTION_FAILED', response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'frame evaluate failed');
     }
     return response.result?.value;
   }
