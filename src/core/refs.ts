@@ -69,7 +69,13 @@ export class RefRegistry {
     if (!parts) return { ok: false, reason: 'invalid' };
     if (!this.state) return { ok: false, reason: 'stale' };
     if (parts.generation !== this.state.generation) return { ok: false, reason: 'stale' };
-    if (docId && this.state.docId !== docId) return { ok: false, reason: 'stale' };
+    // 'unknown' means the activity observer could not name the document at one end of
+    // the comparison. Treating that as a mismatch made every ref stale after a page
+    // where the observer had not installed yet, so it is a wildcard instead.
+    const known = (value: string | null): boolean => Boolean(value) && value !== 'unknown';
+    if (known(docId) && known(this.state.docId) && this.state.docId !== docId) {
+      return { ok: false, reason: 'stale' };
+    }
     return { ok: true };
   }
 }

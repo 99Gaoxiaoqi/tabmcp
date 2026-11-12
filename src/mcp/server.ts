@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { ActionError, toEnvelope } from '../core/errors.js';
 import type { BrowserSession } from '../transport/cdp.js';
+import type { RuntimePage } from '../transport/page.js';
 import { Tab } from '../api/tab.js';
 import { findAdapter, loadAdapters, searchAdapters, type AdapterCatalog } from '../adapters/loader.js';
 import { checkExpectation, runAdapter } from '../adapters/runner.js';
@@ -39,9 +40,16 @@ export function createServer(context: ServerContext): McpServer {
     { capabilities: { tools: {} } },
   );
 
+  // One Tab per page. The Tab owns the ref registry and the activity observer handle,
+  // so building a new one per call made every ref stale immediately.
+  const tabs = new WeakMap<RuntimePage, Tab>();
   const tabFor = async (): Promise<Tab> => {
     const page = await context.session.activePage();
-    return new Tab(page);
+    const existing = tabs.get(page);
+    if (existing) return existing;
+    const created = new Tab(page);
+    tabs.set(page, created);
+    return created;
   };
 
   // After reload/back/forward the injected activity observer is gone. Touching the

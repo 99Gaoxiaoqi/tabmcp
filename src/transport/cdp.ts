@@ -66,6 +66,37 @@ export class CdpSession implements BrowserSession {
     return this.context.pages().map((page) => this.wrap(page));
   }
 
+  private readonly networkListeners: Array<(event: { method: string; params?: Record<string, unknown> }) => void> = [];
+  private readonly attachedPages = new WeakSet<Page>();
+
+  /**
+   * Real CDP events from the underlying browser, so recon works on this transport
+   * too. Playwright's own page events are close but not the same shape the recorder
+   * reads, and inventing a second event vocabulary invites drift.
+   */
+  onNetworkEvent(listener: (event: { method: string; params?: Record<string, unknown> }) => void): void {
+    this.networkListeners.push(listener);
+    for (const page of this.context.pages()) void this.attachNetwork(page);
+    this.context.on('page', (page) => void this.attachNetwork(page));
+  }
+
+  private async attachNetwork(page: Page): Promise<void> {
+    if (this.attachedPages.has(page)) return;
+    this.attachedPages.add(page);
+    try {
+      const session = await page.context().newCDPSession(page);
+      await session.send('Network.enable');
+      for (const method of ['Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFailed']) {
+        session.on(method as 'Network.requestWillBeSent', (params) => {
+          for (const listener of this.networkListeners) listener({ method, params: params as Record<string, unknown> });
+        });
+      }
+    } catch {
+      // A page can vanish before the session attaches; drop it.
+      this.attachedPages.delete(page);
+    }
+  }
+
   async activePage(): Promise<RuntimePage> {
     if (this.preferred && !this.preferred.isClosed()) return this.wrap(this.preferred);
     const pages = this.context.pages().filter((p) => !p.isClosed());
