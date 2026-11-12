@@ -3,32 +3,54 @@
 
 An MCP server that drives a real browser tab: observe, act, read, and record what the page fetches.
 
-Five tools over MCP stdio — `browser_goto`, `browser_observe`, `browser_act`,
-`browser_read`, `browser_screenshot` — backed by Playwright's CDP connection.
+<!-- tool-count: 19 -->
+19 tools over MCP stdio. Grouped by what you want to do, not by name:
 
-No code from TabMCP is copied. The behaviors that make it feel responsive
-are reproduced from a written spec:
+| You want to | Tools |
+|---|---|
+| Look at a page, click, type, read text | `browser_goto` `browser_observe` `browser_act` `browser_read` |
+| Take a picture of the page | `browser_screenshot` (optionally with numbered ref boxes) |
+| See what the page itself requested, and read the JSON it got | `browser_network_read` |
+| Reload, step back and forward | `browser_navigate` |
+| Cookies for a domain | `browser_cookies` |
+| Download a file | `browser_download` |
+| Run a site adapter (installed commands) | `sites_search` `site_run` |
+| Run JavaScript in a persistent REPL | `js` `js_reset` |
+| Record endpoints and draft an adapter | `recon_start` `recon_report` `recon_draft` |
+| Ask how any of this works | `docs_get` |
+| Check the wiring | `doctor` |
 
-| Behavior | Where | Rule |
-|---|---|---|
-| Event-based settle | `src/core/settle.ts` | Settled when the document is parsed, no request the action started is in flight, and the DOM has been quiet for `quietMs` |
-| Action effect | `src/core/settle.ts` | Every action reports `navigated` / `changed` / `none` / `unknown` |
-| Fast not-found | `src/core/settle.ts` | A missing target answers once the page has been quiet for `notFoundQuietMs`, never faster than `notFoundMinWaitMs` |
-| Opaque refs | `src/core/refs.ts` | `e<generation-hex>_<n>`; stale generations are refused, not re-resolved |
-| Bounded ARIA-ish snapshot | `src/core/snapshot.ts` | Interactive nodes carry refs; headings/landmarks give orientation; output bounded by node and char count |
-| Activity incl. shadow DOM | `src/core/activity.ts` | MutationObserver on the document plus scanned/patch-attached shadow roots |
-| Branchable errors | `src/core/errors.ts` | `{ ok: false, error: { code, message, hint?, data? } }` |
+Each installed adapter also registers its own tool (`<site>_<command>`), so the
+runtime list can be longer than 19.
 
 ## Run
 
 ```bash
 npm install
 npm run build
+```
 
-# Attach to a Chrome started with a debugging port
-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/probe
-node dist/src/main.js --connect http://127.0.0.1:9222        # MCP over stdio
-node dist/src/main.js --connect http://127.0.0.1:9222 --probe # self-test
+Start Chrome with a debugging port, then attach. Pick your platform:
+
+```powershell
+# Windows (PowerShell). Start-Process returns immediately; calling Chrome directly
+# keeps the terminal attached to it.
+Start-Process "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" -ArgumentList @(
+  "--remote-debugging-port=9222",
+  "--user-data-dir=$env:TEMP\tabmcp-probe"
+)
+```
+
+```bash
+# macOS / Linux
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir=/tmp/tabmcp-probe
+```
+
+Verify the port answers before going further:
+
+```bash
+curl http://127.0.0.1:9222/json/version     # prints {"Browser": "Chrome/..."}
 ```
 
 MCP client config:
@@ -43,6 +65,50 @@ MCP client config:
   }
 }
 ```
+
+To drive your own logged-in browser instead, use the extension transport
+(`--extension`); see `docs_get channels` for the difference.
+
+## Five minutes: a page whose data HTTP cannot get
+
+Juejin renders search results with JavaScript. A plain HTTP fetch of the same URL
+returns the empty shell; the browser returns the results.
+
+```bash
+# 1. what plain HTTP sees
+curl -s "https://juejin.cn/search?query=python" | grep -c "图解python"    # 0
+```
+
+Then, with tabmcp attached:
+
+```
+browser_goto   { "url": "https://juejin.cn/search?query=python" }
+```
+
+```js
+// js: fetch the search API from the page itself, then keep what matters
+const body = await tab.fetchJson(
+  'https://api.juejin.cn/search_api/v1/search?aid=2608&uuid=&spider=0' +
+  '&query=python&id_type=0&cursor=0&limit=20&search_type=0&sort_type=0&version=1'
+);
+body.data.slice(0, 10).map((item) => ({
+  title: item.result_model.article_info.title,
+  author: item.result_model.author_user_info.user_name,
+  url: 'https://juejin.cn/post/' + item.result_model.article_info.article_id,
+}));
+```
+
+Expected shape (ten rows):
+
+```json
+[
+  { "title": "图解python | 字典", "author": "ShowMeAI", "url": "https://juejin.cn/post/7067755595549376548" },
+  { "title": "图解python | 列表", "author": "ShowMeAI", "url": "https://juejin.cn/post/7067585859272310791" }
+]
+```
+
+The same data is reachable as a one-line adapter once you have the endpoint:
+`sites_search` then `site_run`, or `recon_draft` to generate a skeleton.
 
 ## Tuning
 
@@ -75,6 +141,10 @@ Both transports work against a real Chrome: CDP (`--connect`) and the extension
 - every failure carries a branchable code; transport errors are classified once
 
 Known platform limits are listed in `docs_get` under `channels`.
+
+Below `Status`, the rest of this file is a build log: what was verified, when, and
+what remains. Read it before changing the code, not before using the tool.
+
 
 ## M2: extension transport (verified end to end)
 

@@ -14,7 +14,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/tests/*.test.js",
-    "verify": "node scripts/generate-host-config.mjs --check && node scripts/leak-scan.mjs && node scripts/name-check.mjs && npm run typecheck && npm run build && npm test",
+    "verify": "node scripts/generate-host-config.mjs --check && node scripts/leak-scan.mjs && node scripts/name-check.mjs && node scripts/tool-count.mjs && npm run typecheck && npm run build && npm test",
     "setup:extension": "node scripts/generate-host-config.mjs && node scripts/setup-extension.mjs"
   },
   "dependencies": {
