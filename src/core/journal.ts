@@ -40,7 +40,12 @@ export interface NetworkReadOptions {
   includeStatic?: boolean;
 }
 
-const MAX_BODY_CHARS = 64_000;
+// A single large JSON response (a search API, a feed) must still be readable: dropping
+// it because it exceeded a small per-entry cap made `network_read` silently report
+// nothing for exactly the requests worth reading. Size is bounded in aggregate
+// instead, by evicting the oldest entries.
+const MAX_BODY_CHARS = 4_000_000;
+const MAX_TOTAL_CHARS = 24_000_000;
 const MAX_ENTRIES = 500;
 
 function matchesPattern(url: string, pattern: string | undefined): boolean {
@@ -98,6 +103,17 @@ export class NetworkJournal {
   private push(entry: Omit<JournalEntry, 'sequence'>): void {
     this.entries.push({ ...entry, sequence: ++this.sequence });
     if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity);
+    while (this.entries.length > 1 && this.bodyChars() > MAX_TOTAL_CHARS) this.entries.shift();
+  }
+
+  /** Rough size of what the entries hold, so eviction has something to measure. */
+  private bodyChars(): number {
+    let total = 0;
+    for (const entry of this.entries) {
+      const body = entry.body;
+      total += typeof body === 'string' ? body.length : body === undefined ? 0 : JSON.stringify(body).length;
+    }
+    return total;
   }
 
   read(options: NetworkReadOptions = {}): NetworkReadResult {

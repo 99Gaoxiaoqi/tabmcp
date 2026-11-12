@@ -208,9 +208,11 @@ export class PlaywrightPage implements RuntimePage {
       this.requestIds.set(request, id);
       this.journal.requestStarted(id, request.method(), request.url());
     });
+    const debug = process.env.TABMCP_JOURNAL_DEBUG === '1';
     this.page.on('response', (response) => {
       void (async () => {
         const contentType = response.headers()['content-type'] ?? '';
+        if (debug) process.stderr.write(`[journal] ${response.status()} ${contentType} ${response.url()}\n`);
         if (!/json|text\/plain/i.test(contentType)) return;
         const request = response.request();
         const id = this.requestIds.get(request);
@@ -218,8 +220,9 @@ export class PlaywrightPage implements RuntimePage {
         try {
           const text = await response.text();
           this.journal.record(id, response.status(), contentType, text);
-        } catch {
+        } catch (error) {
           // Redirects and evicted bodies cannot be read; drop the entry.
+          if (debug) process.stderr.write(`[journal] body failed: ${String(error).slice(0, 80)}\n`);
         }
       })();
     });
