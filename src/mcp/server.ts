@@ -30,6 +30,25 @@ export interface ServerContext {
   catalog?: AdapterCatalog;
 }
 
+/** Host of a URL, empty when it cannot be parsed. */
+export function hostOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // chrome-error://chromewebdata and about:blank parse fine but name no site.
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** True when the page's host is the adapter's domain or a subdomain of it. */
+export function hostMatches(url: string, domain: string): boolean {
+  const host = hostOf(url);
+  const wanted = domain.toLowerCase();
+  return Boolean(host) && (host === wanted || host.endsWith('.' + wanted));
+}
+
 function text(value: unknown): { type: 'text'; text: string } {
   return { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) };
 }
@@ -423,15 +442,19 @@ export function createServer(context: ServerContext): McpServer {
     {
       title: 'Run a site adapter',
       description:
-        'Execute an installed adapter. The adapter drives the current tab (or navigates it) and returns structured JSON. Use sites_search first to learn the site, command and arguments.',
+        'Execute an installed adapter against the current tab and return structured JSON. If the adapter declares a domain and the tab is elsewhere this fails with E_WRONG_SITE; pass navigate:true to open the domain first.',
       inputSchema: {
         site: z.string().describe('Adapter site, e.g. "twitter"'),
         command: z.string().describe('Adapter command, e.g. "bookmark"'),
         args: z.record(z.string(), z.unknown()).optional().describe('Arguments per the adapter spec'),
+        navigate: z
+          .boolean()
+          .optional()
+          .describe('Navigate to the adapter domain first (default: require the current tab to be there)'),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
-    async ({ site, command, args }) =>
+    async ({ site, command, args, navigate }) =>
       run(async () => {
         try {
           const loaded = await catalog();
@@ -442,6 +465,23 @@ export function createServer(context: ServerContext): McpServer {
             });
           }
           const tab = await tabFor();
+          const domain = adapter.definition.domain;
+          if (domain) {
+            const current = await tab.page.url().catch(() => '');
+            if (!hostMatches(current, domain)) {
+              if (!navigate) {
+                throw new ActionError(
+                  'E_WRONG_SITE',
+                  `Adapter "${site} ${command}" targets ${domain}, but the current tab is on ${hostOf(current) || 'an unknown page'}`,
+                  {
+                    hint: 'Navigate there first, or call again with navigate:true.',
+                    data: { expected: domain, current: hostOf(current) },
+                  },
+                );
+              }
+              await tab.goto(`https://${domain}/`, { timeoutMs: 45_000 });
+            }
+          }
           const result = await runAdapter({ adapter, tab: tab.page, args: args ?? {} });
           return { content: [text(result)] };
         } catch (err) {

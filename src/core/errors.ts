@@ -18,6 +18,7 @@ export type ErrorCode =
   | 'E_REF_STALE'
   | 'E_TARGET_NOT_FOUND'
   | 'E_TARGET_UNSUPPORTED'
+  | 'E_WRONG_SITE'
   | 'E_NOT_INTERACTABLE'
   | 'E_ACTION_TIMEOUT'
   | 'E_ACTION_FAILED'

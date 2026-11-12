@@ -51,6 +51,9 @@ Rules that matter:
   That is faster and steadier than driving the UI.
 - Arguments are validated before \`run()\`; unknown arguments are rejected.
 - Files starting with \`_\` are shared helpers, not commands.
+- An adapter that declares \`domain\` expects the tab to be on that site: \`site_run\`
+  refuses with \`E_WRONG_SITE\` (and names both hosts) instead of letting the fetch fail
+  as "Failed to fetch". Pass \`navigate:true\` to open the domain first.
 - A draft must be verified before activation: \`expect\` (minRows / result_path / text)
   is how a draft proves it works.
 
