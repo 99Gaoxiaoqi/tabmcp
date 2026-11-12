@@ -14,6 +14,7 @@ export type ErrorCode =
   | 'E_REF_INVALID'
   | 'E_REF_STALE'
   | 'E_TARGET_NOT_FOUND'
+  | 'E_TARGET_UNSUPPORTED'
   | 'E_TARGET_AMBIGUOUS'
   | 'E_NOT_INTERACTABLE'
   | 'E_ACTION_TIMEOUT'
@@ -66,8 +67,41 @@ export interface ErrorEnvelope {
 
 export function toEnvelope(error: unknown): ErrorEnvelope {
   if (error instanceof ActionError) return error.toEnvelope();
+  return classifyUnknown(error).toEnvelope();
+}
+
+/**
+ * Maps a foreign error onto a branchable code.
+ *
+ * The tool layer only formats envelopes, so classification has to happen here —
+ * otherwise every transport timeout reaches the agent as E_INTERNAL and there is
+ * nothing to branch on. `guarded()` and `toEnvelope()` share this one mapping.
+ */
+export function classifyUnknown(error: unknown): ActionError {
+  if (error instanceof ActionError) return error;
   const message = error instanceof Error ? error.message : String(error);
-  return { ok: false, error: { code: 'E_INTERNAL', message } };
+  if (/Target page, context or browser has been closed|No tab with given id|Cannot find context/i.test(message)) {
+    return new ActionError('E_BROWSER_DISCONNECTED', message, {
+      hint: 'The browser or tab closed. Open a new tab before retrying.',
+      cause: error,
+    });
+  }
+  if (/Cannot access a chrome:\/\/ URL|Cannot attach to this target/i.test(message)) {
+    return new ActionError('E_TARGET_UNSUPPORTED', message, {
+      hint: 'Chrome internal pages cannot be driven. Open an http(s) page first.',
+      cause: error,
+    });
+  }
+  if (/element is not visible|no such element|not found in page/i.test(message)) {
+    return new ActionError('E_TARGET_NOT_FOUND', message, {
+      hint: 'Call browser_observe and use a current ref.',
+      cause: error,
+    });
+  }
+  if (/Timeout .* exceeded|timed out/i.test(message)) {
+    return new ActionError('E_ACTION_TIMEOUT', message, { cause: error });
+  }
+  return new ActionError('E_INTERNAL', message, { cause: error });
 }
 
 /** Wrap unknown throws so the tool layer always sees a branchable code. */
@@ -75,16 +109,6 @@ export async function guarded<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof ActionError) throw err;
-    if (err instanceof Error && /Target page, context or browser has been closed/i.test(err.message)) {
-      throw new ActionError('E_BROWSER_DISCONNECTED', err.message, {
-        hint: 'The browser or tab closed. Open a new tab before retrying.',
-        cause: err,
-      });
-    }
-    if (err instanceof Error && /Timeout .* exceeded/i.test(err.message)) {
-      throw new ActionError('E_ACTION_TIMEOUT', err.message, { cause: err });
-    }
-    throw new ActionError('E_INTERNAL', err instanceof Error ? err.message : String(err), { cause: err });
+    throw classifyUnknown(err);
   }
 }

@@ -143,8 +143,16 @@ export class ExtensionPage implements RuntimePage {
   }
 
   private async send<T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs = 30_000): Promise<T> {
-    const result = await this.client.request({ method: 'cdp', params: { tabId: this.tabId, method, ...(params ? { params } : {}) } }, timeoutMs);
-    return result as T;
+    try {
+      const result = await this.client.request({ method: 'cdp', params: { tabId: this.tabId, method, ...(params ? { params } : {}) } }, timeoutMs);
+      return result as T;
+    } catch (error) {
+      // A closed tab must stop being "the active page", otherwise every later call
+      // replays the same stale id.
+      const message = error instanceof Error ? error.message : String(error);
+      if (/No tab with given id|Cannot access a chrome:\/\/ URL/i.test(message)) this.closed = true;
+      throw error;
+    }
   }
 
   private async evaluateRaw<T>(expression: string, awaitPromise = true): Promise<T> {
@@ -175,12 +183,16 @@ export class ExtensionPage implements RuntimePage {
     const result = await this.send<{ frameId?: string; errorText?: string }>('Page.navigate', { url });
     if (result.errorText) throw new Error(result.errorText);
     if (options.waitUntil !== 'commit') {
-      const deadline = Date.now() + options.timeoutMs;
-      const state = options.waitUntil === 'load' ? 'complete' : 'interactive';
+      // "complete" never arrives while a request is still pending, and waiting the
+      // full timeout blocked every later call behind the queue. Interactive is
+      // enough here; settle() decides whether the page has actually stopped moving.
+      const deadline = Date.now() + Math.min(options.timeoutMs, 5_000);
+      const started = Date.now();
       while (Date.now() < deadline) {
         const ready = await this.evaluateRaw<string>('document.readyState').catch(() => 'loading');
-        if (ready === state || (state === 'interactive' && ready === 'complete')) break;
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        if (ready === 'complete') break;
+        if (ready === 'interactive' && Date.now() - started > 800) break;
+        await new Promise((resolve) => setTimeout(resolve, 120));
       }
     }
     return { url: await this.url().catch(() => url), status: null };
@@ -456,12 +468,15 @@ export class ExtensionPage implements RuntimePage {
 
   async download(options: { selector: string; timeoutMs?: number }): Promise<{ filename?: string; bytes?: number; path?: string }> {
     const timeoutMs = options.timeoutMs ?? 30_000;
-    await this.send('Browser.setDownloadBehavior', { behavior: 'allow', eventsEnabled: true }).catch(() => undefined);
-    const began = new Promise<{ suggestedFilename?: string }>((resolve) => {
+    // Browser.setDownloadBehavior only exists on the browser target, and this page's
+    // debugger session is scoped to one tab, so the download is observed through
+    // chrome.downloads in the background instead.
+    const began = new Promise<{ filename?: string }>((resolve) => {
       const off = this.onDownloadEvent((event) => {
-        if (event.method === 'Browser.downloadWillBegin') {
+        if (event.method === 'download.created') {
           off();
-          resolve((event.params ?? {}) as { suggestedFilename?: string });
+          const params = (event.params ?? {}) as { filename?: string };
+          resolve({ filename: params.filename ? params.filename.split(/[\\/]/).pop() : undefined });
         }
       });
       setTimeout(() => {
@@ -471,10 +486,9 @@ export class ExtensionPage implements RuntimePage {
     });
     await this.click(options.selector, timeoutMs);
     const info = await began;
-    if (!info.suggestedFilename) throw new Error(`download did not start within ${timeoutMs}ms`);
-    return { filename: info.suggestedFilename };
+    if (!info.filename) throw new Error(`download did not start within ${timeoutMs}ms`);
+    return { filename: info.filename };
   }
-
   async contentState(): Promise<'ready' | 'empty' | 'placeholder' | 'unknown'> {
     return this.evaluateRaw<'ready' | 'empty' | 'placeholder'>(CONTENT_STATE_SCRIPT).catch(() => 'unknown');
   }
@@ -636,20 +650,28 @@ export class ExtensionSession implements BrowserSession {
   }
 
   async tabs(): Promise<TabInfo[]> {
-    const tabs = await this.client.request({ method: 'tabs', params: {} }, 10_000);
+    const tabs = await this.client.request({ method: 'tabs', params: {} }, 20_000);
     return tabs as TabInfo[];
   }
 
+  /** chrome:// pages cannot be attached, so they are never handed out as the target. */
+  private static usable(tab: TabInfo): boolean {
+    return /^(https?|about|file):/i.test(tab.url ?? '') || (tab.url ?? '') === '';
+  }
+
   async pages(): Promise<RuntimePage[]> {
-    const tabs = await this.tabs();
+    const tabs = (await this.tabs()).filter((tab) => ExtensionSession.usable(tab));
     return tabs.map((tab) => new ExtensionPage(this.client, tab.tabId, (listener) => this.listeners.push(listener)));
   }
 
   async activePage(): Promise<RuntimePage> {
     if (this.active && !this.active.isClosed()) return this.active;
     const tabs = await this.tabs();
-    const target = tabs.find((tab) => tab.active) ?? tabs[0];
-    if (!target) throw new Error('no tabs available');
+    const usable = tabs.filter((tab) => ExtensionSession.usable(tab));
+    const target = usable.find((tab) => tab.active) ?? usable[0];
+    // No usable tab at all: open one rather than attaching to a page the debugger
+    // is not allowed to touch.
+    if (!target) return this.newPage();
     this.active = new ExtensionPage(this.client, target.tabId, (listener) => this.listeners.push(listener));
     return this.active;
   }

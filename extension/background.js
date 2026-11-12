@@ -67,9 +67,18 @@ function connect() {
     if (error) console.warn('[bmcp] native port closed:', error.message);
     port = null;
     attached.clear();
+    // Reconnect on our own: waiting for the 30s keepalive alarm means every call
+    // in that window fails against a host that is actually available again.
+    setTimeout(() => {
+      if (!port) connect();
+    }, 1500);
   });
   send({ id: 0, method: 'hello', params: { extensionVersion: chrome.runtime.getManifest().version } });
 }
+
+chrome.downloads.onCreated.addListener((item) => {
+  send({ id: 0, method: 'download.created', params: { id: item.id, filename: item.filename, url: item.url } });
+});
 
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
@@ -143,6 +152,14 @@ async function handleFromHost(message) {
           }
         }
         send({ id, result: { tabId: tab.id } });
+        return;
+      }
+      case 'download.accept': {
+        // Let the next download land in a known directory and report its path.
+        try {
+          await chrome.downloads.setUiOptions({ enabled: false });
+        } catch {}
+        send({ id, result: { accepted: true } });
         return;
       }
       case 'tab.close': {
