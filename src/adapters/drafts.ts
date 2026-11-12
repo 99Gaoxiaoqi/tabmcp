@@ -92,7 +92,7 @@ export class DraftStore {
     const record = this.get(id);
     if (!record) throw new ActionError('E_TARGET_NOT_FOUND', `draft ${id} not found`);
     if (!record.verifiedAt) {
-      throw new ActionError('E_PAGE_BUSY', `draft ${id} has not been verified; run it against its expectation first`, {
+      throw new ActionError('E_PRECONDITION_FAILED', `draft ${id} has not been verified; run it against its expectation first`, {
         hint: 'Run it against its expectation, then activate.',
       });
     }

@@ -6,21 +6,21 @@
  * `data` carries structured evidence (never HTML blobs).
  */
 
+// Codes are added when a caller can act on them. A declared-but-unused code is an
+// invitation to fill it with the nearest wrong meaning.
 export type ErrorCode =
   | 'E_NO_TAB'
   | 'E_BAD_URL'
   | 'E_NAV_TIMEOUT'
-  | 'E_PAGE_BUSY'
+  | 'E_PRECONDITION_FAILED'
   | 'E_REF_INVALID'
   | 'E_REF_STALE'
   | 'E_TARGET_NOT_FOUND'
   | 'E_TARGET_UNSUPPORTED'
-  | 'E_TARGET_AMBIGUOUS'
   | 'E_NOT_INTERACTABLE'
   | 'E_ACTION_TIMEOUT'
   | 'E_ACTION_FAILED'
   | 'E_BROWSER_DISCONNECTED'
-  | 'E_SESSION_CLOSED'
   | 'E_BAD_ARGUMENT'
   | 'E_INTERNAL';
 
