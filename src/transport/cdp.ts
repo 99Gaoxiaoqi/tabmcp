@@ -7,6 +7,7 @@
  * without touching tool behavior.
  */
 
+import { ActionError } from '../core/errors.js';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { PlaywrightPage } from './playwright-page.js';
 import type { RuntimePage } from './page.js';
@@ -101,7 +102,7 @@ export class CdpSession implements BrowserSession {
     if (this.preferred && !this.preferred.isClosed()) return this.wrap(this.preferred);
     const pages = this.context.pages().filter((p) => !p.isClosed());
     const last = pages[pages.length - 1];
-    if (!last) throw new Error('no page available');
+    if (!last) throw new ActionError('E_NO_TAB', 'no page available');
     this.preferred = last;
     return this.wrap(last);
   }

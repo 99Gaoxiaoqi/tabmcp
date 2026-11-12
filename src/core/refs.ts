@@ -55,7 +55,9 @@ export class RefRegistry {
   }
 
   nextRef(): string {
-    if (!this.state) throw new Error('snapshot not started');
+    if (!this.state) throw new ActionError('E_REF_INVALID', 'snapshot not started', {
+      hint: 'Call observe() first.',
+    });
     return makeRef(this.state.generation, ++this.counter);
   }
 
@@ -78,4 +80,5 @@ export class RefRegistry {
     }
     return { ok: true };
   }
-}
+}import { ActionError } from './errors.js';
+

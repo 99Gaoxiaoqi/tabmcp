@@ -8,6 +8,7 @@
 import type { Page } from 'playwright-core';
 import { ANNOTATE_SCRIPT, REMOVE_ANNOTATION_SCRIPT } from '../core/annotate.js';
 import { CONTENT_STATE_SCRIPT, NetworkJournal } from '../core/journal.js';
+import { cookieMatchesDomain, normalizeCookies, type Cookie } from '../core/cookie.js';
 import { NetworkCounter, type NetworkInfo } from '../core/activity.js';
 import type {
   EvaluateOptions,
@@ -150,11 +151,9 @@ export class PlaywrightPage implements RuntimePage {
     await this.page.goForward({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
   }
 
-  async cookies(domain: string): Promise<Array<{ name: string; value: string; domain: string; path?: string }>> {
+  async cookies(domain: string): Promise<Cookie[]> {
     const all = await this.page.context().cookies();
-    return all
-      .filter((cookie) => !domain || cookie.domain === domain || cookie.domain === `.${domain}` || cookie.domain.endsWith(domain))
-      .map((cookie) => ({ name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path }));
+    return normalizeCookies(all.filter((cookie) => cookieMatchesDomain(cookie, domain)));
   }
 
   async download(options: { selector: string; timeoutMs?: number }): Promise<{ filename?: string; bytes?: number; path?: string }> {

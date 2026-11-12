@@ -7,6 +7,7 @@
  * agents can share one browser and the browser survives an agent restart.
  */
 
+import { ActionError } from '../core/errors.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -117,7 +118,9 @@ export class Broker {
 
   /** Forwards one request to the extension, correlating by id and enforcing a timeout. */
   async call(request: HostRequest, timeoutMs = 30_000): Promise<unknown> {
-    if (!this.link) throw new Error('extension not connected');
+    if (!this.link) throw new ActionError('E_BROWSER_DISCONNECTED', 'extension not connected', {
+      hint: 'Open Chrome with the BrowserMCP extension loaded; it reconnects within a few seconds.',
+    });
     return this.link.request(request, timeoutMs);
   }
 

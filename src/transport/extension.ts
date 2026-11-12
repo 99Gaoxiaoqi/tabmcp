@@ -6,12 +6,14 @@
  * extension, so behavior matches the Playwright path closely.
  */
 
+import { ActionError } from '../core/errors.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import { encodeFrame, FrameDecoder, type BrokerRequest, type BrokerResponse, type BrokerEvent, type TabInfo } from '../protocol.js';
 import { NetworkCounter, type NetworkInfo } from '../core/activity.js';
 import { ANNOTATE_SCRIPT, REMOVE_ANNOTATION_SCRIPT } from '../core/annotate.js';
 import { CONTENT_STATE_SCRIPT, NetworkJournal } from '../core/journal.js';
+import { cookieMatchesDomain, normalizeCookies, type Cookie } from '../core/cookie.js';
 import type { BrowserSession } from './cdp.js';
 import type {
   EvaluateOptions,
@@ -180,6 +182,9 @@ export class ExtensionPage implements RuntimePage {
   ): Promise<NavigationResult> {
     // Capture must be attached before the navigation, or the journal misses it.
     this.ensureJournal();
+    // Page.navigate reports a frame id, not an HTTP status. The status is only
+    // observable on the document response, so subscribe before navigating.
+    const statusPromise = this.waitForDocumentStatus(Math.min(options.timeoutMs, 8_000));
     const result = await this.send<{ frameId?: string; errorText?: string }>('Page.navigate', { url });
     if (result.errorText) throw new Error(result.errorText);
     if (options.waitUntil !== 'commit') {
@@ -195,7 +200,27 @@ export class ExtensionPage implements RuntimePage {
         await new Promise((resolve) => setTimeout(resolve, 120));
       }
     }
-    return { url: await this.url().catch(() => url), status: null };
+    const status = await statusPromise;
+    return { url: await this.url().catch(() => url), status };
+  }
+
+  /** HTTP status of the next main-document response, or null if none arrives. */
+  private async waitForDocumentStatus(timeoutMs: number): Promise<number | null> {
+    return new Promise<number | null>((resolve) => {
+      let settled = false;
+      const finish = (value: number | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      this.onEvent((event) => {
+        if (event.method !== 'Network.responseReceived') return;
+        const params = event.params as { type?: string; response?: { status?: number } } | undefined;
+        if (params?.type !== 'Document') return;
+        finish(typeof params.response?.status === 'number' ? params.response.status : null);
+      });
+      setTimeout(() => finish(null), timeoutMs);
+    });
   }
 
   async evaluate<T = unknown>(script: string, options?: EvaluateOptions): Promise<T> {
@@ -225,14 +250,14 @@ export class ExtensionPage implements RuntimePage {
 
   async click(selector: string, _timeoutMs: number): Promise<void> {
     const target = await this.box(selector);
-    if (!target) throw new Error('element is not visible');
+    if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'element is not visible');
     await this.focus();
     await this.clickAt(target.x, target.y);
   }
 
   async fill(selector: string, value: string, _timeoutMs: number): Promise<void> {
     const target = await this.box(selector);
-    if (!target) throw new Error('element is not visible');
+    if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'element is not visible');
     await this.clickAt(target.x, target.y);
     await this.evaluateRaw<unknown>(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
@@ -246,7 +271,7 @@ export class ExtensionPage implements RuntimePage {
 
   async press(selector: string, key: string, _timeoutMs: number): Promise<void> {
     const target = await this.box(selector);
-    if (!target) throw new Error('element is not visible');
+    if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'element is not visible');
     await this.clickAt(target.x, target.y);
     const descriptor = keyToDescriptor(key);
     await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...descriptor });
@@ -265,12 +290,12 @@ export class ExtensionPage implements RuntimePage {
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     })()`);
-    if (!ok) throw new Error('select option not found');
+    if (!ok) throw new ActionError('E_TARGET_NOT_FOUND', 'select option not found');
   }
 
   async hover(selector: string, _timeoutMs: number): Promise<void> {
     const target = await this.box(selector);
-    if (!target) throw new Error('element is not visible');
+    if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'element is not visible');
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y, button: 'none' });
   }
 
@@ -281,7 +306,7 @@ export class ExtensionPage implements RuntimePage {
       el.scrollIntoView({ block: 'center', inline: 'nearest' });
       return true;
     })()`);
-    if (!ok) throw new Error('element not found');
+    if (!ok) throw new ActionError('E_TARGET_NOT_FOUND', 'element not found');
   }
 
   async waitForSelector(selector: string, timeoutMs: number, state: 'visible' | 'attached' = 'visible'): Promise<void> {
@@ -298,7 +323,7 @@ export class ExtensionPage implements RuntimePage {
       if (ok) return;
       await new Promise((resolve) => setTimeout(resolve, 60));
     }
-    throw new Error(`waitForSelector timed out after ${timeoutMs}ms`);
+    throw new ActionError('E_ACTION_TIMEOUT', `waitForSelector timed out after ${timeoutMs}ms`);
   }
 
   async waitForNavigation(timeoutMs: number): Promise<boolean> {
@@ -443,7 +468,7 @@ export class ExtensionPage implements RuntimePage {
     }>('Page.getNavigationHistory');
     const index = history.currentIndex + delta;
     const target = history.entries[index];
-    if (!target) throw new Error('no history entry in that direction');
+    if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'no history entry in that direction');
     await this.send('Page.navigateToHistoryEntry', { entryId: target.id });
   }
 
@@ -455,15 +480,12 @@ export class ExtensionPage implements RuntimePage {
     await this.navigateHistory(1);
   }
 
-  async cookies(domain: string): Promise<Array<{ name: string; value: string; domain: string; path?: string }>> {
+  async cookies(domain: string): Promise<Cookie[]> {
     const current = await this.url().catch(() => '');
-    const result = await this.send<{ cookies?: Array<{ name: string; value: string; domain: string; path: string }> }>(
-      'Network.getCookies',
-      { urls: [current.startsWith('http') ? current : `https://${domain || 'example.com'}`] },
-    ).catch(() => ({ cookies: [] as Array<{ name: string; value: string; domain: string; path: string }> }));
-    return (result.cookies ?? []).filter(
-      (cookie) => !domain || cookie.domain === domain || cookie.domain === `.${domain}` || cookie.domain.endsWith(domain),
-    );
+    const result = await this.send<{ cookies?: Array<Record<string, unknown>> }>('Network.getCookies', {
+      urls: [current.startsWith('http') ? current : `https://${domain || 'example.com'}`],
+    }).catch(() => ({ cookies: [] as Array<Record<string, unknown>> }));
+    return normalizeCookies((result.cookies ?? []).filter((cookie) => cookieMatchesDomain(cookie, domain)));
   }
 
   async download(options: { selector: string; timeoutMs?: number }): Promise<{ filename?: string; bytes?: number; path?: string }> {
@@ -486,7 +508,11 @@ export class ExtensionPage implements RuntimePage {
     });
     await this.click(options.selector, timeoutMs);
     const info = await began;
-    if (!info.filename) throw new Error(`download did not start within ${timeoutMs}ms`);
+    if (!info.filename) {
+      throw new ActionError('E_ACTION_TIMEOUT', `download did not start within ${timeoutMs}ms`, {
+        hint: 'This channel only observes downloads through chrome.downloads; headless Chrome may block them.',
+      });
+    }
     return { filename: info.filename };
   }
   async contentState(): Promise<'ready' | 'empty' | 'placeholder' | 'unknown'> {
@@ -553,7 +579,7 @@ export class ExtensionPage implements RuntimePage {
 
   async evaluateInFrame(target: { index?: number; frameId?: string }, script: string): Promise<unknown> {
     if (target.index === 0 || (target.index === undefined && !target.frameId)) return this.evaluateRaw(script);
-    if (!target.frameId) throw new Error('only index 0 is supported without a frameId');
+    if (!target.frameId) throw new ActionError('E_TARGET_UNSUPPORTED', 'only index 0 is supported without a frameId');
     const world = await this.send<{ executionContextId: number }>('Page.createIsolatedWorld', {
       frameId: target.frameId,
       worldName: 'browsermcp-frame',

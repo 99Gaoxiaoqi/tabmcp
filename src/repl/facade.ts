@@ -5,6 +5,7 @@
  * catalogue, so code written in the REPL can be lifted straight into an adapter.
  */
 
+import { ActionError } from '../core/errors.js';
 import type { Tab } from '../api/tab.js';
 import type { AdapterCatalog } from '../adapters/loader.js';
 import { findAdapter, searchAdapters } from '../adapters/loader.js';
@@ -77,7 +78,11 @@ export function createReplGlobals(deps: ReplDeps): Record<string, unknown> {
     run: async (site: string, command: string, args: Record<string, unknown> = {}) => {
       const catalog = await deps.catalog();
       const adapter = findAdapter(catalog, site, command);
-      if (!adapter) throw new Error(`no adapter "${site} ${command}"`);
+      if (!adapter) {
+      throw new ActionError('E_TARGET_NOT_FOUND', `no adapter "${site} ${command}"`, {
+        hint: 'Run sites_search to list installed adapters.',
+      });
+    }
       const tabInstance = await deps.tabFor();
       const result = await runAdapter({ adapter, tab: tabInstance.page, args, log });
       const expectation = checkExpectation(adapter.definition.expect, result.result);

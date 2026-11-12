@@ -6,6 +6,7 @@
  * as JSON, carry an expectation, and only become real adapters on activation.
  */
 
+import { ActionError } from '../core/errors.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,7 +76,7 @@ export class DraftStore {
 
   markVerified(id: string): DraftRecord {
     const record = this.get(id);
-    if (!record) throw new Error(`draft ${id} not found`);
+    if (!record) throw new ActionError('E_TARGET_NOT_FOUND', `draft ${id} not found`);
     record.verifiedAt = new Date().toISOString();
     fs.writeFileSync(path.join(this.dir, `${id}.json`), JSON.stringify(record, null, 2), 'utf8');
     return record;
@@ -89,9 +90,11 @@ export class DraftStore {
    */
   activate(id: string): { file: string } {
     const record = this.get(id);
-    if (!record) throw new Error(`draft ${id} not found`);
+    if (!record) throw new ActionError('E_TARGET_NOT_FOUND', `draft ${id} not found`);
     if (!record.verifiedAt) {
-      throw new Error(`draft ${id} has not been verified; run it against its expectation first`);
+      throw new ActionError('E_PAGE_BUSY', `draft ${id} has not been verified; run it against its expectation first`, {
+        hint: 'Run it against its expectation, then activate.',
+      });
     }
     const dir = path.join(this.adapterDir, record.site);
     fs.mkdirSync(dir, { recursive: true });

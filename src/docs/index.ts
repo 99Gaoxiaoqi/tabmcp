@@ -57,23 +57,57 @@ Rules that matter:
 Write them with the REPL: explore with \`tab.*\`, confirm the shape, then save the file.
 `;
 
+const CHANNELS = `# Channels
+
+Two transports exist: \`--connect <endpoint>\` (CDP, attaches to a browser started with a
+debugging port) and \`--extension\` (a Chrome extension plus a native host). Prefer the
+extension for the user's real, logged-in browser; prefer CDP for scripted runs.
+
+What is identical:
+
+- tool names, argument schemas, and result field names. \`goto\` returns
+  \`{ok,url,title,status}\` and \`cookies\` returns
+  \`{name,value,domain,path,httpOnly,secure}\` on both channels. Anything else is a bug,
+  not a channel difference.
+
+What differs:
+
+- download: supported on CDP. On the extension channel a download is observed through
+  \`chrome.downloads\`, and headless Chrome does not start one, so it fails with
+  \`E_ACTION_TIMEOUT\`. Not verified in headed Chrome.
+- network_read: CDP records from the first navigation this session performed; the
+  extension records from the moment the debugger attached. Same shape, different
+  starting point, so counts can differ on the same page.
+- cold start: after the native host restarts, the extension reconnects within about
+  two seconds, and calls in that window fail with \`E_BROWSER_DISCONNECTED\`.
+
+Cookies are trimmed on purpose: \`expires\`, \`session\`, \`priority\`, \`size\`,
+\`sourcePort\` and \`sourceScheme\` are dropped so both channels agree.
+`;
+
 const RECON = `# Recon
 
 1. \`recon_start\` — begin recording.
 2. Drive the page (search, open a result, page through) — or ask the user to.
 3. \`recon_report\` — endpoints seen, most used first, with status and query params.
-4. \`recon_draft\` — turn one endpoint into adapter source with TODOs.
+4. \`recon_draft\` — returns adapter source plus a suggested path. Nothing is written
+   to disk and nothing is activated: the draft is text you review and save.
 
 Only XHR/fetch traffic is recorded, deduped by \`METHOD path\`. Documents and assets
 are ignored on purpose: they are the page loading, not an API.
 
-A draft is text. It is never activated automatically — guesses about argument
-semantics and result shapes are what make a bad adapter.
+A draft is a guess about argument semantics and result shapes. That is why it is text.
 `;
 
 export const DOCS: DocEntry[] = [
   { name: 'quickstart', title: 'Quickstart', summary: 'How to look, act and read results safely.', body: QUICKSTART },
   { name: 'adapters', title: 'Writing adapters', summary: 'Contract, external directory, draft rules.', body: ADAPTERS },
+  {
+    name: 'channels',
+    title: 'Channel differences',
+    summary: 'What CDP and the extension have in common, and what they do not.',
+    body: CHANNELS,
+  },
   { name: 'recon', title: 'Recording endpoints', summary: 'Turn observed traffic into an adapter draft.', body: RECON },
 ];
 
