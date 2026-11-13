@@ -681,6 +681,8 @@ export class ExtensionSession implements BrowserSession {
   private readonly owned = new Map<number, Retention>();
   private listeners: Array<(event: BrokerEvent) => void> = [];
   private active: ExtensionPage | null = null;
+  /** Set when activePage() had to abandon a tab the caller was using. */
+  private replaced: { previousTabId: string | null; currentTabId: string; cause: string } | null = null;
 
   private constructor(private readonly client: BrokerClient) {
     client.on((event) => {
@@ -715,8 +717,16 @@ export class ExtensionSession implements BrowserSession {
     return tabs.map((tab) => new ExtensionPage(this.client, tab.tabId, (listener) => this.listeners.push(listener)));
   }
 
+  /** Hand the replacement news to the caller once. */
+  takePageReplacement(): { previousTabId: string | null; currentTabId: string; cause: string } | null {
+    const replaced = this.replaced;
+    this.replaced = null;
+    return replaced;
+  }
+
   async activePage(): Promise<RuntimePage> {
     if (this.active && !this.active.isClosed()) return this.active;
+    const abandoned = this.active ? String(this.active.id) : null;
     const tabs = await this.tabs();
     const usable = tabs.filter((tab) => ExtensionSession.usable(tab));
     const target = usable.find((tab) => tab.active) ?? usable[0];
@@ -724,6 +734,13 @@ export class ExtensionSession implements BrowserSession {
     // is not allowed to touch.
     if (!target) return this.newPage();
     this.active = new ExtensionPage(this.client, target.tabId, (listener) => this.listeners.push(listener));
+    if (abandoned) {
+      this.replaced = {
+        previousTabId: abandoned,
+        currentTabId: String(this.active.id),
+        cause: 'the tab in use was closed',
+      };
+    }
     return this.active;
   }
 

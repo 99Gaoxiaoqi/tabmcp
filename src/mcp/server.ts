@@ -10,6 +10,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { ActionError, toEnvelope } from '../core/errors.js';
+import { looksDeadMessage, type SessionNotice } from '../transport/deferred.js';
 import type { BrowserSession } from '../transport/cdp.js';
 import type { RuntimePage } from '../transport/page.js';
 import { Tab } from '../api/tab.js';
@@ -62,6 +63,98 @@ export function createServer(context: ServerContext): McpServer {
   // One Tab per page. The Tab owns the ref registry and the activity observer handle,
   // so building a new one per call made every ref stale immediately.
   const tabs = new WeakMap<RuntimePage, Tab>();
+
+  /**
+   * A call can be served by a different tab than the one the caller was using (the
+   * browser died, or the tab was closed). Reconnecting silently would make an action
+   * on the wrong page look like success, so the news travels with the result.
+   */
+  const takeSessionNotice = (): SessionNotice | null => {
+    const session = context.session as BrowserSession & { takeNotice?: () => SessionNotice | null };
+    return typeof session.takeNotice === 'function' ? session.takeNotice() : null;
+  };
+
+  /**
+   * A page operation can fail because its page is gone (closed by the user, or the
+   * browser restarted). Re-attaching and running the call once more is the difference
+   * between "your tab vanished" and "this tool is broken" — but it must be honest, so
+   * the retry is announced through the envelope.
+   */
+  const recoverSession = async (cause: string): Promise<boolean> => {
+    const session = context.session as BrowserSession & { recover?: (cause: string) => Promise<boolean> };
+    if (typeof session.recover !== 'function') return false;
+    return session.recover(cause);
+  };
+
+  const deadCause = (body: unknown): string | null => {
+    if (!body || typeof body !== 'object') return null;
+    const error = (body as { error?: { message?: unknown } }).error;
+    const message = typeof error?.message === 'string' ? error.message : '';
+    return message && looksDeadMessage(message) ? message : null;
+  };
+
+  const withNotice = (body: unknown, notice: SessionNotice | null): unknown => {
+    if (!notice || !body || typeof body !== 'object' || Array.isArray(body)) return body;
+    const result = { ...(body as Record<string, unknown>) };
+    if (notice.replaced) {
+      result.sessionReplaced = true;
+      result.previousTabId = notice.replaced.previousTabId;
+      result.currentTabId = notice.replaced.currentTabId;
+      result.replaceCause = notice.replaced.cause;
+    }
+    if (notice.unmatchedDeadText) {
+      // Errors normally live under `error`; doctor reports the browser under `browserError`.
+      const key = result.error ? 'error' : result.browserError ? 'browserError' : null;
+      if (key) {
+        const error = result[key] as Record<string, unknown>;
+        const data = (error.data ?? {}) as Record<string, unknown>;
+        result[key] = { ...error, data: { ...data, deadLikeTextUnmatched: notice.unmatchedDeadText } };
+      } else {
+        result.deadLikeTextUnmatched = notice.unmatchedDeadText;
+      }
+    }
+    return result;
+  };
+
+  /**
+   * Every tool result goes through here once, so no call site can forget to mention a
+   * replacement. The text body is JSON for all tools except docs_get, whose prose is
+   * left untouched.
+   */
+  const originalRegisterTool = server.registerTool.bind(server);
+  (server as unknown as { registerTool: unknown }).registerTool = (
+    name: string,
+    config: unknown,
+    handler: (...args: unknown[]) => Promise<{ content: { type: 'text'; text: string }[] }>,
+  ) =>
+    originalRegisterTool(name, config as never, (async (...args: unknown[]) => {
+      let result = await handler(...args);
+      let notice = takeSessionNotice();
+      if (!notice?.replaced) {
+        const first = result.content[0];
+        let cause: string | null = null;
+        try {
+          cause = deadCause(JSON.parse(first.text));
+        } catch {
+          cause = null;
+        }
+        if (cause && (await recoverSession(cause))) {
+          result = await handler(...args);
+          notice = takeSessionNotice();
+        }
+      }
+      if (!notice) return result;
+      const first = result.content[0];
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(first.text);
+      } catch {
+        return result; // prose stays prose
+      }
+      const merged = withNotice(parsed, notice);
+      return { ...result, content: [{ ...first, text: JSON.stringify(merged, null, 2) }, ...result.content.slice(1)] };
+    }) as never);
+
   const tabFor = async (): Promise<Tab> => {
     const page = await context.session.activePage();
     const existing = tabs.get(page);

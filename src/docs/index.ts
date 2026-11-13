@@ -84,6 +84,20 @@ What differs:
 - cold start: after the native host restarts, the extension reconnects within about
   two seconds, and calls in that window fail with \`E_BROWSER_DISCONNECTED\`.
 
+- closed tab: if the tab in use is closed (by the user, or because the browser
+  restarted) the next call is served by another tab. That result carries
+  \`sessionReplaced: true\` with \`previousTabId\`, \`currentTabId\` and
+  \`replaceCause\`, so an action that landed somewhere else cannot look like an
+  action that landed where you asked. A normal call never carries those fields.
+- no browser at all: the server still starts, every tool stays listable, and browser
+  tools answer \`E_NO_BROWSER\` with a command to start one. \`doctor\` reports
+  \`ok:true, connected:false\`; \`docs_get\` keeps working, because the tool that
+  explains the problem must not need the thing that is missing.
+- unclear transport death: when a message sounds like a dead connection but matches no
+  known wording, the error carries \`data.deadLikeTextUnmatched\`. That wording list
+  will go stale eventually; the marker is how the staleness becomes visible instead of
+  turning into "this never works again".
+
 Platform limits that look like our bugs but are not:
 
 - Chrome's native messaging manifest has no \`args\` field. A host that needs

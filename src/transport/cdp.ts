@@ -98,13 +98,32 @@ export class CdpSession implements BrowserSession {
     }
   }
 
+  /** Set when activePage() had to abandon a page the caller was using. */
+  private replaced: { previousTabId: string | null; currentTabId: string; cause: string } | null = null;
+
+  /** Hand the replacement news to the caller once. */
+  takePageReplacement(): { previousTabId: string | null; currentTabId: string; cause: string } | null {
+    const replaced = this.replaced;
+    this.replaced = null;
+    return replaced;
+  }
+
   async activePage(): Promise<RuntimePage> {
     if (this.preferred && !this.preferred.isClosed()) return this.wrap(this.preferred);
+    const abandoned = this.preferred && this.preferred.isClosed() ? this.wrap(this.preferred).id : null;
     const pages = this.context.pages().filter((p) => !p.isClosed());
     const last = pages[pages.length - 1];
     if (!last) throw new ActionError('E_NO_TAB', 'no page available');
     this.preferred = last;
-    return this.wrap(last);
+    const wrapped = this.wrap(last);
+    if (abandoned) {
+      this.replaced = {
+        previousTabId: abandoned,
+        currentTabId: wrapped.id,
+        cause: 'the page in use was closed',
+      };
+    }
+    return wrapped;
   }
 
   async newPage(): Promise<RuntimePage> {
