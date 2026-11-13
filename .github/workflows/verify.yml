@@ -15,16 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `cache: npm` on purpose. With setup-node's npm cache enabled, `npm ci` on this
+      # image dies with "Exit handler never called!" before printing anything; without it
+      # the same command succeeds (both measured on run 43351774375).
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-
-      # The runner's bundled npm (11.x on this image) dies with "Exit handler never
-      # called!" before installing anything. 10.9.8 is the version this project is
-      # developed and verified with, so CI uses the same one instead of hoping.
-      - name: pin npm
-        run: npm install -g npm@10.9.8
 
       - name: install
         run: |
