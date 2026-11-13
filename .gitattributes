@@ -1,0 +1,22 @@
+# 本文件只声明「以后新增或检出的文件按什么换行存、哪些算二进制」，
+# 不改动仓库里已有文件的现存字节，也不做一次全仓 renormalize
+# （那会把几十个文件的换行同时改写，diff 里看不出任何真实改动）。
+#
+# 现状供对照：索引里全部是 LF；工作区里有少数文件是 CRLF（历史遗留），
+# 那些不在本文件的处理范围内，也不会被它自动修好。
+
+* text=auto
+
+# launcher/Launcher.cs 由 Windows 自带的 csc.exe 编译。
+# 同一份提交实测：仓库里 4160 B，autocrlf 的 clone 里 4280 B —— 120 个换行各多一个 \r。
+# 这条 eol=crlf 不是随手写的：它让 .cs 一检出就是 CRLF，和 csc 的默认输入一致。
+*.cs                     text eol=crlf
+
+# 这两个仍按 LF 存：CI 在 windows-latest 上跑，但远端存储应该是 LF，
+# 否则每次 checkout 都会把整份文件标成「已修改」。
+*.cmd                    text eol=lf
+.github/workflows/*.yml  text eol=lf
+
+# 二进制：任何换行处理都会破坏它们。
+*.png                    binary
+*.exe                    binary
