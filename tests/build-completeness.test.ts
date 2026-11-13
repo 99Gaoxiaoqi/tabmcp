@@ -44,10 +44,28 @@ function makeTree(files: Record<string, string>): string {
 
 // ------------------------------------------------------------------ the real tree
 
-test('the real build output has no unresolved relative imports', () => {
-  const result = run([]);
+/** Parse the structured summary. Tests assert THIS, never the human sentence. */
+function summary(args: string[]): { modules: number; imports: number; dynamic: number; unresolved: number } {
+  const result = run([...args, '--json']);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /build completeness: \d+ compiled modules, \d+ relative imports, 0 unresolved/);
+  return JSON.parse(result.stdout.trim());
+}
+
+test('the real build output has no unresolved relative imports', () => {
+  const data = summary([]);
+  // Non-zero floors are part of the assertion, not decoration: a scan that looked at
+  // zero imports would otherwise report "0 unresolved" and pass.
+  assert.ok(data.modules > 0, 'compiled modules were found');
+  assert.ok(data.imports > 0, 'relative imports were found and followed');
+  assert.equal(data.unresolved, 0);
+});
+
+test('the default output is for people and says nothing the JSON does not', () => {
+  const result = run([]);
+  assert.equal(result.status, 0, 'exit code is the contract');
+  assert.ok(result.stdout.trim().length > 0, 'a human still gets a line');
+  // No content assertions here on purpose: pinning the wording would make every
+  // improvement to the report a test failure.
 });
 
 // -------------------------------------------------------------- negative controls
@@ -58,10 +76,13 @@ test('an artifact deleted from the output is reported, not tolerated', () => {
   const tree = makeTree({
     'dist/src/host/install.js': "import { a } from '../shared/hostname.mjs';\nexport const x = a;\n",
   });
-  const result = run(['--root', tree]);
+  const result = run(['--root', tree, '--json']);
   assert.equal(result.status, 1, 'a missing artifact is a finding, not an inability to check');
-  assert.match(result.stderr, /1 relative import\(s\) point at files that are not in the build output/);
-  assert.match(result.stderr, /dist[\\/]src[\\/]host[\\/]install\.js -> \.\.\/shared\/hostname\.mjs/);
+  const data = JSON.parse(result.stdout.trim());
+  assert.equal(data.unresolved, 1);
+  assert.equal(data.missing.length, 1);
+  assert.match(data.missing[0].file, /dist[\\/]src[\\/]host[\\/]install\.js$/);
+  assert.equal(data.missing[0].specifier, '../shared/hostname.mjs');
 });
 
 test('deleting the file that the import needs turns the same tree green or red, and nothing else', () => {
@@ -82,11 +103,14 @@ test('every entry that goes missing is named, not just the first', () => {
   const tree = makeTree({
     'dist/src/a.js': "import './b.js';\nimport './c.js';\n",
   });
-  const result = run(['--root', tree]);
+  const result = run(['--root', tree, '--json']);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /-> \.\/b\.js/);
-  assert.match(result.stderr, /-> \.\/c\.js/);
-  assert.match(result.stderr, /2 relative import\(s\)/);
+  const data = JSON.parse(result.stdout.trim());
+  assert.equal(data.unresolved, 2);
+  assert.deepEqual(
+    data.missing.map((m: { specifier: string }) => m.specifier),
+    ['./b.js', './c.js'],
+  );
 });
 
 test('a tree with no dist at all is "could not check", not "found nothing"', () => {
@@ -124,7 +148,7 @@ test('the matcher finds relative specifiers and ignores everything else', async 
   // A gate is only as good as what it looks at. If this matcher missed a form, the
   // gate would report "0 unresolved" while never having looked at that import.
   const module = (await import(pathToFileURL(SCRIPT).href)) as {
-    relativeSpecifiers: (source: string) => string[];
+    scanSpecifiers: (source: string) => { found: string[]; dynamic: number };
   };
   const source = [
     "import { a } from './a.js';",
@@ -136,10 +160,23 @@ test('the matcher finds relative specifiers and ignores everything else', async 
     "import type { T } from './types.js';",
     "const dynamic = await import('./e.js');",
   ].join('\n');
-  const found = module.relativeSpecifiers(source);
+  const { found } = module.scanSpecifiers(source);
   for (const expected of ['./a.js', './b.js', './c.js', './d.js', './types.js']) {
     assert.ok(found.includes(expected), `expected ${expected} in ${JSON.stringify(found)}`);
   }
   assert.ok(!found.includes('node:fs'), 'builtins are not files to resolve');
   assert.ok(!found.includes('@scope/pkg'), 'packages are not files to resolve');
+
+  // `await import('./x.js')` with a literal is static and must be followed. The first
+  // version of this matcher dropped it, because collapsing whitespace turned
+  // `await import(` into `awaitimport(` and the word boundary vanished - the gate was
+  // silently under-reporting one real import in this very repository.
+  assert.ok(found.includes('./e.js'), 'a literal dynamic import is still a static specifier');
+
+  // A template literal with interpolation cannot be resolved without running the
+  // program. It must be counted and reported, never silently ignored: "checked and
+  // found nothing" and "did not check" must not look the same.
+  const built = module.scanSpecifiers("await import(`${dir}/x.js`);");
+  assert.deepEqual(built.found, []);
+  assert.equal(built.dynamic, 1, 'an interpolated specifier is reported as unchecked');
 });

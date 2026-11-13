@@ -30,7 +30,13 @@
  *   2  the check could not run: no dist/, no compiled modules, unreadable files
  *
  * Usage:
- *   node scripts/build-completeness.mjs [--root <dir>]
+ *   node scripts/build-completeness.mjs [--root <dir>] [--json]
+ *
+ * `--json` prints {modules, imports, dynamic, unresolved, missing} instead of a sentence.
+ *
+ * `--root` is the REPOSITORY root, not the output directory: the script looks for
+ * `<root>/dist/src` and `<root>/dist/tests`. Passing `dist/` itself reports
+ * "dist/ does not exist", which is correct but reads oddly the first time.
  *
  * `--root` exists so a test can aim this at a deliberately damaged copy, which is
  * the only way to show it can fail at all: the real tree is green, so a positive
@@ -54,16 +60,28 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * code that preceded it. Only `from`, `import`, and `require(` put a string in a
  * specifier position; anything else is data.
  *
- * Known limit: a specifier inside a template literal with `${...}` is not static and
- * is not followed.
+ * Known limits, printed rather than hidden: a specifier built inside a template
+ * literal with `${...}` interpolation is not static, so it is counted and reported
+ * as unchecked instead of silently ignored - "looked and found nothing" and "did not
+ * look" must not produce the same output.
  */
-export function relativeSpecifiers(source) {
+export function scanSpecifiers(source) {
   const found = [];
+  let dynamic = 0;
   let code = ''; // trailing slice of code seen so far, outside strings and comments
   let i = 0;
 
+  // Whitespace is collapsed to one space rather than dropped: dropping it turns
+  // `await import(` into `awaitimport(`, which destroys the word boundary the
+  // patterns below rely on, and a silent zero here would mean "nothing dynamic"
+  // for a file that has one.
   const inSpecifierPosition = () =>
-    /\bfrom$/.test(code) || /\bimport$/.test(code) || /\brequire\($/.test(code);
+    /\bfrom\s*$/.test(code) ||
+    /\bimport\s*$/.test(code) ||
+    /\bimport\s*\(\s*$/.test(code) ||
+    /\brequire\s*\(\s*$/.test(code);
+
+  const isDynamicCall = () => /\bimport\s*\(\s*$/.test(code) || /\brequire\s*\(\s*$/.test(code);
 
   while (i < source.length) {
     const char = source[i];
@@ -83,29 +101,40 @@ export function relativeSpecifiers(source) {
       const quote = char;
       let j = i + 1;
       let text = '';
-      let dynamic = false;
+      let interpolated = false;
       while (j < source.length) {
         if (source[j] === '\\') {
           text += source[j + 1] ?? '';
           j += 2;
           continue;
         }
-        if (quote === '`' && source[j] === '$' && source[j + 1] === '{') dynamic = true;
+        if (quote === '`' && source[j] === '$' && source[j + 1] === '{') interpolated = true;
         if (source[j] === quote) break;
         text += source[j];
         j += 1;
       }
-      if (!dynamic && inSpecifierPosition() && text.startsWith('.')) found.push(text);
+      if (interpolated) {
+        // Built at runtime: cannot be resolved without running the program. Count it
+        // so the summary can say how much was left out.
+        if (isDynamicCall()) dynamic += 1;
+      } else if (inSpecifierPosition() && text.startsWith('.')) {
+        found.push(text);
+      }
       code = ''; // the literal ends the keyword context
       i = j + 1;
       continue;
     }
 
-    if (!/\s/.test(char)) code = (code + char).slice(-32);
+    if (/\s/.test(char)) { if (!code.endsWith(' ')) code = (code + ' ').slice(-48); } else { code = (code + char).slice(-48); }
     i += 1;
   }
 
-  return found;
+  return { found, dynamic };
+}
+
+/** Backwards-compatible name for callers that only want the static list. */
+export function relativeSpecifiers(source) {
+  return scanSpecifiers(source).found;
 }
 
 /**
@@ -146,6 +175,7 @@ function main() {
   // up. Never process.cwd() - that made an identical command behave differently
   // depending on where it was launched from, a defect this project already had once
   // (d3f5a4b).
+  const asJson = argv.includes('--json');
   const rootArg = option('--root');
   const ROOT = rootArg ? path.resolve(rootArg) : path.resolve(HERE, '..');
   const DIST = path.join(ROOT, 'dist');
@@ -183,6 +213,7 @@ function main() {
   }
 
   let specifiers = 0;
+  let dynamic = 0;
   const unresolved = [];
 
   for (const file of files) {
@@ -192,7 +223,9 @@ function main() {
     } catch (error) {
       fail(2, `cannot read ${path.relative(ROOT, file)}: ${error.message}`);
     }
-    for (const specifier of relativeSpecifiers(source)) {
+    const scanned = scanSpecifiers(source);
+    dynamic += scanned.dynamic;
+    for (const specifier of scanned.found) {
       specifiers += 1;
       if (!resolves(file, specifier)) {
         unresolved.push({ file: path.relative(ROOT, file), specifier });
@@ -200,20 +233,46 @@ function main() {
     }
   }
 
+  const summary = {
+    modules: files.length,
+    imports: specifiers,
+    dynamic,
+    unresolved: unresolved.length,
+    missing: unresolved,
+  };
+
   if (unresolved.length > 0) {
-    process.stderr.write(
-      `build completeness: ${unresolved.length} relative import(s) point at files that are not in the build output\n`,
-    );
-    for (const miss of unresolved) {
-      process.stderr.write(`  ${miss.file} -> ${miss.specifier}\n`);
+    if (asJson) process.stdout.write(`${JSON.stringify(summary)}\n`);
+    else {
+      process.stderr.write(
+        `build completeness: ${unresolved.length} relative import(s) point at files that are not in the build output\n`,
+      );
+      for (const miss of unresolved) {
+        process.stderr.write(`  ${miss.file} -> ${miss.specifier}\n`);
+      }
+      process.stderr.write('the compiled output cannot load itself; `tsc` exiting 0 does not cover this\n');
     }
-    process.stderr.write('the compiled output cannot load itself; `tsc` exiting 0 does not cover this\n');
     process.exit(1);
   }
 
+  // `--json` exists so a test can assert the RESULT instead of the wording. An earlier
+  // test pinned the human sentence, so making the sentence more honest turned the
+  // suite red - and that pressure runs against everything this gate is for.
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(summary)}\n`);
+    return;
+  }
+
   process.stdout.write(
-    `build completeness: ${files.length} compiled modules, ${specifiers} relative imports, 0 unresolved\n`,
+    `build completeness: ${files.length} compiled modules, ${specifiers} static relative imports, 0 unresolved\n`,
   );
+  if (dynamic > 0) {
+    // A pass has to say what it did not look at. "0 unresolved" alone reads as
+    // "everything was checked", and these were not.
+    process.stdout.write(
+      `  (+${dynamic} specifier(s) built at runtime inside a template literal, not checked)\n`,
+    );
+  }
 }
 
 // Only run when invoked as a program. Importing this module (the test does, to probe
