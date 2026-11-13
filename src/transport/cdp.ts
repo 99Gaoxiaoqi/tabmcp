@@ -192,16 +192,19 @@ export class CdpSession implements BrowserSession {
   }
 
   async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
-    const pages = await this.pages();
     const current = this.preferred && !this.preferred.isClosed() ? this.wrap(this.preferred).id : null;
-    let focused: string | null = null;
-    for (const page of pages) {
-      if (await this.visibility(page)) {
-        focused = page.id;
-        break;
-      }
+    if (!current) return null;
+    const visible: string[] = [];
+    for (const page of await this.pages()) {
+      if (await this.visibility(page)) visible.push(page.id);
     }
-    if (!focused || !current || focused === current) return null;
+    // Two windows side by side are *both* visible, and `visibilityState` cannot tell
+    // which one the user is actually looking at. Reporting either would be a guess,
+    // and a guess that points the wrong way is worse than saying nothing: the whole
+    // value of this notice is that it is true when it appears.
+    if (visible.length !== 1) return null;
+    const focused = visible[0]!;
+    if (focused === current) return null;
     return { current, focused };
   }
 

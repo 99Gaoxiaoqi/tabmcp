@@ -281,3 +281,49 @@ test('a failed network attach is retried on the next call', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(attempts, 2, 'the next registration must not inherit a permanent failure');
 });
+// ---------------------------------------------------------------------------
+// Foreground signal: say nothing when the signal cannot decide.
+// ---------------------------------------------------------------------------
+
+function fakeTabPage(visible: boolean) {
+  return {
+    isClosed: () => false,
+    url: () => 'https://example.test/',
+    title: async () => 'tab',
+    on: () => undefined,
+    evaluate: async (script: string) =>
+      script.includes('visibilityState') ? visible : true,
+    context: () => ({ newCDPSession: async () => ({ send: async () => undefined, on: () => undefined, detach: async () => undefined }) }),
+  };
+}
+
+test('focusDifference stays silent when two tabs are both visible', async () => {
+  const pages = [fakeTabPage(true), fakeTabPage(true)];
+  const context = { pages: () => pages, on: () => undefined };
+  const session = cdpSessionOf({ close: async () => undefined }, context);
+  await session.activePage(); // the last page becomes the current target
+  assert.equal(
+    await session.focusDifference(),
+    null,
+    'two visible windows cannot say which one the user is looking at; guessing points the wrong way',
+  );
+});
+
+test('focusDifference still names the only visible tab when one is visible', async () => {
+  const pages = [fakeTabPage(false), fakeTabPage(true)];
+  const context = { pages: () => pages, on: () => undefined };
+  const session = cdpSessionOf({ close: async () => undefined }, context);
+  const current = await session.activePage(); // the second (visible) page
+  assert.equal(await session.focusDifference(), null, 'current target equals the only visible tab');
+
+  const otherSessionPages = [fakeTabPage(true), fakeTabPage(false)];
+  const other = cdpSessionOf(
+    { close: async () => undefined },
+    { pages: () => otherSessionPages, on: () => undefined },
+  );
+  await other.activePage();
+  const diff = await other.focusDifference();
+  assert.ok(diff, 'the other visible tab is a real difference');
+  assert.notEqual(diff!.focused, diff!.current);
+  assert.ok(current.id);
+});
