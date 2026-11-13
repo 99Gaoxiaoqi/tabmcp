@@ -20,6 +20,7 @@ import { JsSession } from '../repl/session.js';
 import { createReplGlobals } from '../repl/facade.js';
 import { ReconRecorder, draftFromCandidate } from '../recon/capture.js';
 import { DOCS, docsIndex, getDoc, listDocs } from '../docs/index.js';
+import { placeDownload } from '../core/downloads.js';
 
 /**
  * Tools whose repeat is harmless. A click and a js snippet are deliberately absent:
@@ -450,14 +451,22 @@ export function createServer(context: ServerContext): McpServer {
     'browser_download',
     {
       title: 'Download a file',
-      description: 'Click an element (by ref or selector) that starts a download, and wait for the file.',
+      description:
+        'Click an element (by ref or selector) that starts a download, and wait for the file. ' +
+        'Without dir the file stays in a temporary folder with no extension; pass dir to keep it ' +
+        'under its real name.',
       inputSchema: {
         ref: z.string().optional().describe('Element ref from observe'),
         selector: z.string().optional().describe('CSS selector, if no ref'),
+        dir: z
+          .string()
+          .optional()
+          .describe('Directory to save into, under the real file name. Created if missing.'),
+        filename: z.string().optional().describe('Override the saved file name (only with dir).'),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
       },
     },
-    async ({ ref, selector, timeoutMs }) =>
+    async ({ ref, selector, dir, filename, timeoutMs }) =>
       run(async () => {
         try {
           const tab = await tabFor();
@@ -465,7 +474,12 @@ export function createServer(context: ServerContext): McpServer {
           if (!target) {
             throw new ActionError('E_BAD_ARGUMENT', 'pass ref or selector', { hint: 'Call browser_observe to get a ref.' });
           }
-          const result = await tab.page.download({ selector: target, ...(timeoutMs ? { timeoutMs } : {}) });
+          const captured = await tab.page.download({ selector: target, ...(timeoutMs ? { timeoutMs } : {}) });
+          // Without dir this is the raw capture, unchanged; with dir the file is copied out.
+          const result = await placeDownload(captured, {
+            ...(dir ? { dir } : {}),
+            ...(filename ? { filename } : {}),
+          });
           return { content: [text({ ok: true, ...result })] };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };

@@ -1,3 +1,4 @@
+import { TOOLS } from './tools.js';
 /**
  * Agent-facing documentation.
  *
@@ -127,6 +128,7 @@ A draft is a guess about argument semantics and result shapes. That is why it is
 
 export const DOCS: DocEntry[] = [
   { name: 'quickstart', title: 'Quickstart', summary: 'How to look, act and read results safely.', body: QUICKSTART },
+  { name: 'tools', title: 'Tools', summary: 'What each result field means, and where downloads land.', body: TOOLS },
   { name: 'adapters', title: 'Writing adapters', summary: 'Contract, external directory, draft rules.', body: ADAPTERS },
   {
     name: 'channels',
