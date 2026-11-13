@@ -53,6 +53,18 @@ internal static class Launcher
         }
 
         var pumpOutput = child.StandardOutput.BaseStream.CopyToAsync(Console.OpenStandardOutput());
+
+        // Chrome keeps this process's pipe open for as long as the process lives. So if node
+        // dies and the launcher stays blocked in stdin.Read below, Chrome still sees a live
+        // host, never respawns one, and the extension cannot reconnect - every call fails
+        // while the UI looks healthy. Follow the child out instead.
+        child.EnableRaisingEvents = true;
+        child.Exited += delegate
+        {
+            try { pumpOutput.Wait(1000); }
+            catch (Exception) { }
+            Environment.Exit(0);
+        };
         var stdin = Console.OpenStandardInput();
         var buffer = new byte[8192];
 
