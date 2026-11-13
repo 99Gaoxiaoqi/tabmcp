@@ -8,6 +8,7 @@
  */
 
 import { ActionError } from '../core/errors.js';
+import { NetworkTap } from '../recon/network-tap.js';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { PlaywrightPage } from './playwright-page.js';
 import type { RuntimePage } from './page.js';
@@ -33,6 +34,12 @@ export interface BrowserSession {
   readonly kind: 'cdp' | 'extension';
   /** Optional CDP event stream, used by recon; transports without it report unavailable. */
   onNetworkEvent?(listener: (event: { method: string; params?: Record<string, unknown> }) => void): void;
+  /**
+   * Whether the network event stream is currently attached, and where the last gap
+   * started. Optional: transports that cannot observe their own attachment simply
+   * do not implement it, and callers must not read that absence as "healthy".
+   */
+  networkTapState?(): { attachLost: boolean; lostAtSequence: number | null } | undefined;
   /** Pages the agent may operate on. */
   pages(): Promise<RuntimePage[]>;
   /** The page to use when the caller did not name one. */
@@ -94,13 +101,16 @@ export class CdpSession implements BrowserSession {
   }
 
   private readonly networkListeners: Array<(event: { method: string; params?: Record<string, unknown> }) => void> = [];
-  private readonly attachedPages = new WeakSet<Page>();
-  /** One page-hook for the whole session; a hook per listener grows on every reconnect. */
+  /**
+   * Network sessions live in the tap, not here: it owns re-attach and the record of
+   * any gap. Keeping a second copy of "is this page attached" in this class is how
+   * the two views drifted apart in the first place.
+   */
+  private readonly tap = new NetworkTap((event) => {
+    for (const listener of this.networkListeners) listener(event);
+  });
+
   private pageHookInstalled = false;
-  /** CDP sessions this transport opened, so close() can detach them. */
-  private readonly cdpSessions: Array<{ detach(): Promise<void> }> = [];
-  /** Pages whose network attach failed; retried next time pages are walked. */
-  private readonly attachErrors = new Map<Page, string>();
 
   /**
    * Real CDP events from the underlying browser, so recon works on this transport
@@ -109,38 +119,25 @@ export class CdpSession implements BrowserSession {
    */
   onNetworkEvent(listener: (event: { method: string; params?: Record<string, unknown> }) => void): void {
     if (!this.networkListeners.includes(listener)) this.networkListeners.push(listener);
-    for (const page of this.context.pages()) void this.attachNetwork(page);
+    for (const page of this.context.pages()) void this.tap.ensureAttached(page);
     if (!this.pageHookInstalled) {
       this.pageHookInstalled = true;
-      this.context.on('page', (page) => void this.attachNetwork(page));
+      this.context.on('page', (page) => void this.tap.ensureAttached(page));
     }
   }
 
   /** Network-attach failures, for doctor-style reporting rather than silent gaps. */
   networkAttachDiagnostics(): Array<{ url: string; error: string }> {
-    return [...this.attachErrors].map(([page, error]) => ({ url: page.url(), error }));
+    return this.tap.diagnostics();
+  }
+
+  /** Whether events are flowing right now, and where the last gap started. */
+  networkTapState(): { attachLost: boolean; lostAtSequence: number | null } {
+    return this.tap.state();
   }
 
   private async attachNetwork(page: Page): Promise<void> {
-    if (this.attachedPages.has(page)) return;
-    this.attachedPages.add(page);
-    try {
-      const session = await page.context().newCDPSession(page);
-      await session.send('Network.enable');
-      this.cdpSessions.push(session);
-      this.attachErrors.delete(page);
-      for (const method of ['Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFailed']) {
-        session.on(method as 'Network.requestWillBeSent', (params) => {
-          for (const listener of this.networkListeners) listener({ method, params: params as Record<string, unknown> });
-        });
-      }
-    } catch (error) {
-      // A page can vanish before the session attaches. Drop the marker so the
-      // next walk retries, and keep the reason: an empty event stream otherwise
-      // reads as "this tab made no requests".
-      this.attachedPages.delete(page);
-      this.attachErrors.set(page, error instanceof Error ? error.message : String(error));
-    }
+    await this.tap.ensureAttached(page);
   }
 
   /** Set when activePage() had to abandon a page the caller was using. */
@@ -252,9 +249,7 @@ export class CdpSession implements BrowserSession {
     this.owned.length = 0;
     // Detach the network sessions we opened: an attached session keeps the page's
     // instrumentation alive after the transport is gone.
-    for (const session of this.cdpSessions.splice(0)) {
-      await session.detach().catch(() => undefined);
-    }
+    await this.tap.detachAll();
     // connectOverCDP: closing the connection must not kill the user's browser.
     await this.browser.close().catch(() => undefined);
   }

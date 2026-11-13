@@ -408,12 +408,26 @@ export function createServer(context: ServerContext): McpServer {
 
   // Recon watches the extension's CDP events; transports without a stream say so.
   const recon = new ReconRecorder();
-  let reconAttached = false;
+  /**
+   * One listener reference for the lifetime of the server. Handing over a fresh arrow
+   * on every call would register a second listener on transports that do not dedupe
+   * (the extension channel appends to its client), so every request would be counted
+   * twice.
+   */
+  const reconListener = (event: { method: string; params?: Record<string, unknown> }): void => recon.ingest(event);
+  /**
+   * Where the listener was last handed. Deliberately not a boolean: the deferred
+   * transport swaps the live session underneath, and a latch that never reopens keeps
+   * claiming the recorder is attached to a session that no longer exists.
+   */
+  let reconHandedTo: BrowserSession | null = null;
   const attachRecon = (): boolean => {
-    if (reconAttached) return true;
-    if (!context.session.onNetworkEvent) return false;
-    context.session.onNetworkEvent((event) => recon.ingest(event));
-    reconAttached = true;
+    const session = context.session;
+    if (!session.onNetworkEvent) return false;
+    if (reconHandedTo !== session) {
+      session.onNetworkEvent(reconListener);
+      reconHandedTo = session;
+    }
     return true;
   };
 
@@ -605,6 +619,12 @@ export function createServer(context: ServerContext): McpServer {
         const candidates = report.candidates
           .slice(0, cap)
           .map(({ lastRequestId: _ignored, ...rest }) => rest);
+        // Whether the event stream is attached is a fact about the transport, and it is
+        // reported on every call rather than only when it goes wrong: a caller must be
+        // able to branch on this field without first checking that it exists. A
+        // transport that cannot observe its own stream reports false - it has no
+        // evidence of a gap, and claiming one would be its own kind of lie.
+        const tap = context.session.networkTapState?.();
         return {
           content: [
             text({
@@ -615,6 +635,11 @@ export function createServer(context: ServerContext): McpServer {
               total,
               hasMore: total > cap,
               candidates,
+              // `lostAtSequence` is a boundary, not a timestamp: events up to that
+              // sequence reached the recorder, and everything after it is missing until
+              // `attachLost` is false again. Requests counted before the gap stay counted.
+              attachLost: tap?.attachLost ?? false,
+              lostAtSequence: tap?.lostAtSequence ?? null,
             }),
           ],
         };

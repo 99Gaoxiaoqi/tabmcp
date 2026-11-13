@@ -133,6 +133,14 @@ export class DeferredSession implements BrowserSession {
   }
 
   /**
+   * Forward the transport's view of its own event stream. Undefined when the live
+   * transport cannot observe it: "I cannot tell" must not be reported as "healthy".
+   */
+  networkTapState(): { attachLost: boolean; lostAtSequence: number | null } | undefined {
+    return this.live?.networkTapState?.();
+  }
+
+  /**
    * Attach if needed. Concurrent callers share one attempt; a failed attempt is
    * remembered briefly so `pages()` in a retry loop costs nothing.
    */
