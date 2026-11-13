@@ -4,6 +4,24 @@
   "private": true,
   "type": "module",
   "description": "MCP server that drives a real browser tab: ARIA snapshots, opaque refs, adapters and a REPL.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "browser-automation",
+    "chrome-extension",
+    "cdp",
+    "playwright",
+    "aria"
+  ],
+  "homepage": "https://github.com/99Gaoxiaoqi/tabmcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/99Gaoxiaoqi/tabmcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/99Gaoxiaoqi/tabmcp/issues"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },

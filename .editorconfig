@@ -1,0 +1,30 @@
+# 现状说明（2026-11-13）：
+#   本仓库没有 .gitattributes，且 core.autocrlf=true。
+#   工作树里多数文件是 LF，.github/workflows/verify.yml 是 CRLF —— 目前是不一致的。
+#   这里声明的是「新文件应该长什么样」，不是「现有文件已经如此」。
+#   统一现有文件属于另一件事（需要 .gitattributes + 一次全仓换行归一），不在本文件范围内。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# 制表符是内容，不是缩进
+[*.{md,markdown}]
+trim_trailing_whitespace = false
+
+# 与仓库现有约定一致（tsc / node / yml 都用 2 空格）
+[*.{ts,js,mjs,cjs,json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+
+# 生成物不要手工编辑
+[package-lock.json]
+insert_final_newline = false

@@ -3,6 +3,35 @@
 
 An MCP server that drives a real browser tab: observe, act, read, and record what the page fetches.
 
+## 这是什么
+
+tabmcp 把浏览器能力交给 AI 助手：它是一个 MCP（Model Context Protocol）服务器，让模型能看你正在用的那个网页，而不是看一个空的。它驱动你自己已经登录的 Chrome 标签页——不是无头浏览器，也不需要把密码交给它。
+
+## 安装
+
+```bash
+npm install                 # 装依赖
+npm run verify              # 全链闸门：闸脚本 + 类型检查 + 构建 + 测试，必须是 exit 0
+npm run build:launcher      # 编 native-host.exe（扩展通道要用的本机消息宿主）
+npm run setup:extension     # 读 host.config.json，生成 extension/host-config.js，并注册本机消息宿主
+```
+
+`dist/` 和 `native-host.exe` 都是**构建产物**，干净的 clone 里没有；没跑过 `npm run build` 则 `dist/src/main.js` 不存在。第一条命令要求 Node 22 或更新（`package.json` 的 `engines` 会在这条上拦住旧版本）。
+
+## 快速开始
+
+三步，从空目录到一个能回答的服务器：
+
+```bash
+npm install && npm run build
+# 另开一个终端，按 [Run](#run) 一节启动带 --remote-debugging-port=9222 的 Chrome
+node dist/src/main.js --connect http://127.0.0.1:9222 --probe
+```
+
+`--probe` 会在这个已经跑起来的浏览器里把每个 API 跑一遍并打印结果。它**不会自己启动浏览器**：没有带调试端口的 Chrome 时，它打印 `E_BROWSER_DISCONNECTED` 与一条能直接粘贴的启动命令（exit 1），不抛堆栈。
+
+要接到 MCP 客户端，见下文 [Run](#run) 一节的 `mcpServers` 配置。
+
 <!-- tool-count: 20 -->
 20 built-in tools over MCP stdio (including the list-only browser_tabs and browser_tabs_select), plus one tool per installed adapter. Grouped by
 what you want to do, not by name:
@@ -22,7 +51,7 @@ what you want to do, not by name:
 | Check the wiring | `doctor` |
 
 Each installed adapter also registers its own tool (`<site>_<command>`), so the runtime
-list is 18 plus the number of adapters (`sites_search` shows them).
+list is the built-in tools plus one per installed adapter (`sites_search` shows them).
 
 ## Run
 
@@ -438,8 +467,8 @@ flow, but no product code constructs it, so in practice the gate is you reading 
 | `find({role,name,text,css})` | locate elements when the agent has no ref |
 | `expect({selector,text,url},{timeoutMs})` | assert a condition instead of guessing timings |
 
-Tests: 31 total (30 pass, 1 skipped) — adapter validation, argument coercion, loader
-discovery, runner error mapping, expectation checking, draft activation gating.
+Run `npm test` for the counts — this section covers adapter validation, argument coercion,
+loader discovery, runner error mapping, expectation checking, draft activation gating.
 
 ## JavaScript REPL (`js`, `js_reset`)
 
@@ -476,9 +505,9 @@ Measured on the real site (logged-in Chrome, 立创 search page):
 | `tab.find({role:'button',name:'搜索'})` | returns two refs |
 | `tab.expect({text:'螺丝'}, 1500ms)` | 2 ms, ok |
 
-Tests: 12 REPL-specific (persistence, classes, top-level await, console capture,
-errors, syntax errors, timeout, reset, truncation), plus two MCP-level tests that drive
-the `js` tool through a real MCP client.
+Run `npm test` for the counts. Covered here: persistence, classes, top-level await, console
+capture, errors, syntax errors, timeout, reset, truncation — plus two MCP-level tests that
+drive the `js` tool through a real MCP client.
 
 ## Tab ownership, doctor, frames
 
@@ -498,7 +527,8 @@ thing to call when something looks wrong, instead of guessing.
 **frames()** lists the page's frames on both transports (`Page.getFrameTree` on the
 extension path, `page.frames()` on the Playwright path).
 
-Tests: 46 total (45 pass, 1 skipped).
+Run `npm test` for the counts — except one test that needs a browser listening on
+`127.0.0.1:9222`; `REQUIRE_BROWSER=1` turns that skip into a failure.
 
 ## Remaining items: isolation, recovery, frames, annotation, recon
 
@@ -528,4 +558,27 @@ judgement is needed — drafts are text, never auto-activated. Real capture pick
 `GET /mro/api/hotkey` (2 calls, 200) and `POST /api/web-traces` from ordinary page
 traffic.
 
-Tests: 57 total (56 pass, 1 skipped).
+Tests: `npm test` prints the counts (`# pass N / # tests M`); every one of them runs on Windows,
+except a single test that needs a browser listening on `127.0.0.1:9222` —
+`REQUIRE_BROWSER=1` turns that skip into a failure instead of letting it pass quietly.
+
+## 平台支持
+
+| 平台 | 状态 |
+|---|---|
+| Windows | **已验证**：本仓库的全部测试与端到端验证都在这里跑 |
+| macOS | **未验证**：没有一次实机运行 |
+| Linux | **未验证**：没有一次实机运行 |
+
+代码里没有 Windows 专属分支，`npm run verify` 在别的平台上大概率也能跑通——但“大概率能跑通”不是“支持”，所以这里只写已验证的那一个。
+
+## 许可证
+
+见 [LICENSE](LICENSE) 文件。
+
+## 贡献与安全
+
+- 想参与、提 PR 之前读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 发现安全问题不要开公开 issue，按 [SECURITY.md](SECURITY.md) 报告。
+
+这是单人维护的项目，不承诺响应时限；能复现的问题会优先看。

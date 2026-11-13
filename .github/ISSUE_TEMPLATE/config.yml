@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全问题（请私下报告）
+    url: https://github.com/99Gaoxiaoqi/tabmcp/security/advisories/new
+    about: 漏洞、能绕过权限的操作、令牌泄漏等。请不要用公开 issue，细节只在这条渠道里写。
+  - name: 使用问题与想法
+    url: https://github.com/99Gaoxiaoqi/tabmcp/issues
+    about: "「怎么让它做某件事」「这个报错什么意思」这类问题；开 issue 时说清 HEAD 和 verify 的 # pass N / # tests M。"
