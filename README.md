@@ -240,11 +240,21 @@ cannot work; it has to be a real executable, and `launcher/Launcher.cs` is it.
 for the host binary. A green `verify` says the TypeScript is sound; it says nothing about
 whether a browser could actually start the host.
 
-Measured on the development machine (2026-11-13): exit 0, `native-host.exe` 6144 B from a
-4160 B `Launcher.cs`. The compiler is the .NET Framework `csc.exe` that ships with Windows
-(`Framework64`, then `Framework`); **no .NET SDK is required, and `dotnet` is not used**.
-There is no `.csproj`, so `dotnet build` never applied. Not yet verified on a clean clone
-of this repository - the numbers above are from one machine.
+Measured on a clean clone (2026-11-13, commit `e2f27f7`): after `npm install`, both
+`npm run build:launcher` and `npm run verify` exit 0 there, `native-host.exe` is produced
+at 6144 B, and the compiler found is the .NET Framework `csc.exe` that ships with Windows
+(`Framework64`, then `Framework`). **No .NET SDK is required, and `dotnet` is not used** -
+there is no `.csproj`, so `dotnet build` never applied.
+
+The clone starts with no `dist/`, no `node_modules/` and no `native-host.exe` - all three
+are git-ignored, and `git status` still reports a clean tree after `build:launcher` has
+written the executable. That is the whole point: the repository does not carry the binary,
+so a checkout is not a working installation until these steps are run.
+
+The executable is the stable number to quote (6144 B in both the development tree and the
+clone). Do not quote the size of `Launcher.cs` itself: with `core.autocrlf=true` the
+checked-out file is CRLF on one machine and LF on another, which moves its byte count
+without changing a character of code.
 
 If no compiler can be found the script exits non-zero and prints every path it searched.
 That failure is the intended behaviour: it must not leave a missing or empty executable
@@ -340,15 +350,18 @@ forcing every action to block until the page is perfectly still.
 
 ## Tests: what runs where, and why one used to skip
 
-`npm test` runs 24 tests across four files:
+The suite is split by what it needs, not by what it covers:
 
-| File | Tests | Needs a browser |
-|---|---|---|
-| `settle.test.ts` | 11 | no (fake activity source) |
-| `protocol.test.ts` | 6 | no |
-| `broker.test.ts` | 3 | no |
-| `mcp-fake.test.ts` | 3 | no (fake transport) |
-| `mcp.test.ts` | 1 | **yes** |
+| Needs a browser | Where |
+|---|---|
+| no | almost everything - fake transports, fake pages, temporary directories |
+| **yes** | `mcp.test.ts`, the only file that spawns the real server over stdio and drives Chrome |
+
+Counts are deliberately not written here. This table used to say "24 tests across four
+files" and drifted to 30 files and 200+ tests before anyone noticed - a hand-copied total
+is wrong the next time someone adds a test, and quietly so. Take the current number from
+the run itself (`npm test` ends with `# tests N`), or from the `test surface` and
+`# tests` lines in `npm run verify`.
 
 The browser-backed MCP test spawns the real server over stdio and drives Chrome. On a
 machine without a browser on `BROWSER_ENDPOINT` it now:
