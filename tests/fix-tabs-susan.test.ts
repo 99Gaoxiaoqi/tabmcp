@@ -1,4 +1,4 @@
-﻿/**
+/**
  * fix-tabs: browser_tabs / browser_tabs_select, and the marker for acting on a tab the
  * user is not looking at.
  */
@@ -30,7 +30,7 @@ function page(id: string): RuntimePage {
 }
 
 /** A session that records what the tools did to it. */
-function fakeSession(options: { diff?: { current: string; focused: string } | null } = {}) {
+function fakeSession(options: { diff?: { current: string; foreground: string } | null } = {}) {
   const state = {
     selected: 'pw-1111',
     diff: options.diff === undefined ? null : options.diff,
@@ -38,8 +38,8 @@ function fakeSession(options: { diff?: { current: string; focused: string } | nu
     listCalls: 0,
   };
   const tabs = (): TabDescriptor[] => [
-    { id: 'pw-1111', url: 'https://example.test/one', title: 'one', currentTarget: state.selected === 'pw-1111', focused: true },
-    { id: 'pw-2222', url: 'https://example.test/two', title: 'two', currentTarget: state.selected === 'pw-2222', focused: false },
+    { id: 'pw-1111', url: 'https://example.test/one', title: 'one', currentTarget: state.selected === 'pw-1111', foreground: true },
+    { id: 'pw-2222', url: 'https://example.test/two', title: 'two', currentTarget: state.selected === 'pw-2222', foreground: false },
   ];
   const session: BrowserSession = {
     kind: 'cdp',
@@ -78,7 +78,7 @@ test('browser_tabs lists every tab with target and focus flags', async () => {
   assert.equal(body.ok, true);
   assert.equal(body.count, 2);
   assert.deepEqual(
-    body.tabs.map((tab: TabDescriptor) => [tab.id, tab.currentTarget, tab.focused]),
+    body.tabs.map((tab: TabDescriptor) => [tab.id, tab.currentTarget, tab.foreground]),
     [
       ['pw-1111', true, true],
       ['pw-2222', false, false],
@@ -112,11 +112,11 @@ test('selecting an unknown tab reports the ids that do exist', async () => {
 });
 
 test('a tool acting while the user looks elsewhere carries tabFocusDiffers', async () => {
-  const { session } = fakeSession({ diff: { current: 'pw-1111', focused: 'pw-2222' } });
+  const { session } = fakeSession({ diff: { current: 'pw-1111', foreground: 'pw-2222' } });
   const client = await clientFor(session);
   const body = bodyOf(await client.callTool({ name: 'browser_navigate', arguments: { action: 'reload' } }));
 
-  assert.deepEqual(body.tabFocusDiffers, { current: 'pw-1111', focused: 'pw-2222' });
+  assert.deepEqual(body.tabFocusDiffers, { current: 'pw-1111', foreground: 'pw-2222' });
   await client.close();
 });
 
@@ -129,7 +129,7 @@ test('no marker when the target is the tab the user is looking at', async () => 
 });
 
 test('browser_tabs itself does not carry the marker (it describes focus already)', async () => {
-  const { session } = fakeSession({ diff: { current: 'pw-1111', focused: 'pw-2222' } });
+  const { session } = fakeSession({ diff: { current: 'pw-1111', foreground: 'pw-2222' } });
   const client = await clientFor(session);
   const body = bodyOf(await client.callTool({ name: 'browser_tabs', arguments: {} }));
   assert.equal('tabFocusDiffers' in body, false);

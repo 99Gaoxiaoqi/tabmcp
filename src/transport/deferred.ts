@@ -1,4 +1,4 @@
-﻿/**
+/**
  * A session that may not exist yet.
  *
  * The MCP client connects before the user has necessarily started a browser. If the
@@ -274,7 +274,7 @@ export class DeferredSession implements BrowserSession {
     return this.retryOnDead((live) => (live.tabList as () => Promise<TabDescriptor[]>)());
   }
 
-  async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
+  async focusDifference(): Promise<{ current: string | null; foreground: string | null } | null> {
     if (!this.live?.focusDifference) return null;
     return this.live.focusDifference().catch(() => null);
   }
@@ -286,7 +286,12 @@ export class DeferredSession implements BrowserSession {
         hint: 'Use doctor to see the current tab, or attach over CDP to choose one.',
       });
     }
-    await this.retryOnDead((live) => (live.selectTab as (tabId: string) => Promise<void>)(id));
+// Deliberately not `retryOnDead`: that helper re-attaches and runs the callback
+    // again. For a read that is what you want. For this one it would set the default
+    // target twice and, because the repeat succeeds, the caller would never learn the
+    // first attempt may already have landed. Let the dead error through; the MCP layer
+    // answers with `sessionReplaced` and says the action may already have happened.
+    await session.selectTab(id);
   }
 
   async activePage(): Promise<RuntimePage> {

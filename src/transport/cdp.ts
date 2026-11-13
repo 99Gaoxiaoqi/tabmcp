@@ -19,8 +19,14 @@ export interface TabDescriptor {
   title: string;
   /** True when a call without a tab would use this one. */
   currentTarget: boolean;
-  /** True when the tab is actually visible to the user. */
-  focused: boolean;
+/**
+   * Whether the tab is in front of the user. Read `foregroundSignal` to know what
+   * this is based on: the CDP channel infers it from `document.visibilityState`, so
+   * side-by-side windows can all report true; the extension channel asks
+   * `chrome.tabs.active`. Neither channel can always tell, and neither answers
+   * "which one is the user reading".
+   */
+  foreground: boolean;
 }
 
 export interface BrowserSession {
@@ -37,7 +43,7 @@ export interface BrowserSession {
   /** Set the default target. Deliberately not "use once": stickiness must survive. */
   selectTab?(id: string): Promise<void>;
   /** Non-null only when the user is looking at a different tab than the target. */
-  focusDifference?(): Promise<{ current: string | null; focused: string | null } | null>;
+  focusDifference?(): Promise<{ current: string | null; foreground: string | null } | null>;
   close(): Promise<void>;
 }
 
@@ -166,9 +172,11 @@ export class CdpSession implements BrowserSession {
   }
 
   /**
-   * `document.visibilityState` is the only foreground signal a page can be asked for.
-   * It says "the user is looking at this tab", which is what "focused" has to mean here:
-   * the alternative is guessing from focus events we never subscribe to.
+   * `document.visibilityState` is the only foreground signal a page can be asked for,
+   * and it answers a weaker question than it looks: "this tab's window is not minimised
+   * or hidden", not "the user is reading this tab". Several windows side by side all
+   * answer true. Subscribing to CDP focus events would be stronger, at the cost of event
+   * ordering; until then the honest name for what this returns is visibility.
    */
   private async visibility(page: RuntimePage): Promise<boolean> {
     return page
@@ -186,26 +194,27 @@ export class CdpSession implements BrowserSession {
         url: await page.url().catch(() => ''),
         title: await page.title().catch(() => ''),
         currentTarget: page.id === preferred,
-        focused: await this.visibility(page),
+        foreground: await this.visibility(page),
       })),
     );
   }
 
-  async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
+  async focusDifference(): Promise<{ current: string | null; foreground: string | null } | null> {
     const current = this.preferred && !this.preferred.isClosed() ? this.wrap(this.preferred).id : null;
     if (!current) return null;
     const visible: string[] = [];
     for (const page of await this.pages()) {
       if (await this.visibility(page)) visible.push(page.id);
     }
-    // Two windows side by side are *both* visible, and `visibilityState` cannot tell
-    // which one the user is actually looking at. Reporting either would be a guess,
-    // and a guess that points the wrong way is worse than saying nothing: the whole
-    // value of this notice is that it is true when it appears.
+    // Unlike `tabList`, where several tabs may each truthfully be in front of their own
+    // window, this answers a global question: which single tab has the user's attention.
+    // Two windows side by side are both visible and `visibilityState` cannot separate
+    // them, so anything picked here would be a guess - and a guess pointing the wrong
+    // way is worse than silence, because the only value of this notice is being true.
     if (visible.length !== 1) return null;
-    const focused = visible[0]!;
-    if (focused === current) return null;
-    return { current, focused };
+    const foreground = visible[0]!;
+    if (foreground === current) return null;
+    return { current, foreground };
   }
 
   async selectTab(id: string): Promise<void> {

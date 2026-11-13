@@ -1,10 +1,10 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/mcp/server.js';
 import type { BrowserSession } from '../src/transport/cdp.js';
-import { FakePage } from './mcp-fake.test.js';
+import { FakePage } from './helpers/fake.js';
 
 type ToolResult = { content?: Array<{ type?: string; text?: string }> };
 

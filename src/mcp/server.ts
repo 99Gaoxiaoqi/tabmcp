@@ -11,7 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { ActionError, toEnvelope } from '../core/errors.js';
 import { looksDeadMessage, type SessionNotice } from '../transport/deferred.js';
-import type { BrowserSession } from '../transport/cdp.js';
+import type { BrowserSession, TabDescriptor } from '../transport/cdp.js';
 import type { RuntimePage } from '../transport/page.js';
 import { Tab } from '../api/tab.js';
 import { findAdapter, loadAdapters, searchAdapters, type AdapterCatalog } from '../adapters/loader.js';
@@ -33,6 +33,7 @@ export const RETRY_SAFE_TOOLS = [
   'browser_observe',
   'browser_read',
   'browser_screenshot',
+  'browser_tabs',
   'doctor',
 ] as const;
 
@@ -155,10 +156,10 @@ export function createServer(context: ServerContext): McpServer {
    * Stickiness is deliberate, so the target does not follow the user's foreground tab.
    * What must not happen is acting on a background tab without saying so.
    */
-  const focusDifference = async (toolName: string): Promise<{ current: string | null; focused: string | null } | null> => {
+  const focusDifference = async (toolName: string): Promise<{ current: string | null; foreground: string | null } | null> => {
     if (toolName === 'browser_tabs' || toolName === 'browser_tabs_select' || toolName === 'doctor') return null;
     const session = context.session as BrowserSession & {
-      focusDifference?: () => Promise<{ current: string | null; focused: string | null } | null>;
+      focusDifference?: () => Promise<{ current: string | null; foreground: string | null } | null>;
     };
     if (typeof session.focusDifference !== 'function') return null;
     return session.focusDifference().catch(() => null);
@@ -413,8 +414,10 @@ export function createServer(context: ServerContext): McpServer {
     async () =>
       run(async () => {
         try {
+// `TabDescriptor` is the single definition; a hand-copied inline shape here
+          // would drift the moment a field is added (it already did once).
           const session = context.session as BrowserSession & {
-            tabList?: () => Promise<Array<{ id: string; url: string; title: string; currentTarget: boolean; focused: boolean }>>;
+            tabList?: () => Promise<TabDescriptor[]>;
           };
           if (typeof session.tabList !== 'function') {
             throw new ActionError('E_TARGET_UNSUPPORTED', 'this transport cannot list tabs', {
@@ -422,7 +425,11 @@ export function createServer(context: ServerContext): McpServer {
             });
           }
           const tabs = await session.tabList();
-          return { content: [text({ ok: true, count: tabs.length, tabs })] };
+// Which signal produced `foreground`. Kept next to the data rather than in a
+          // comment, because the two channels do not measure the same thing and a reader
+          // cannot tell them apart from the values alone.
+          const foregroundSignal = context.session.kind === 'extension' ? 'active' : 'visibility';
+          return { content: [text({ ok: true, count: tabs.length, foregroundSignal, tabs })] };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }

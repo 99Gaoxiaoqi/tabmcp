@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -6,7 +6,7 @@ import { createServer } from '../src/mcp/server.js';
 import { DeferredSession } from '../src/transport/deferred.js';
 import type { BrowserSession } from '../src/transport/cdp.js';
 import type { RuntimePage } from '../src/transport/page.js';
-import { FakePage } from './mcp-fake.test.js';
+import { FakePage } from './helpers/fake.js';
 
 type Envelope = { content?: Array<{ type?: string; text?: string }> };
 
@@ -103,11 +103,13 @@ test('the retry list is read-only tools only', async () => {
   const { RETRY_SAFE_TOOLS } = await import('../src/mcp/server.js');
   assert.deepEqual(
     [...RETRY_SAFE_TOOLS].sort(),
-    ['browser_goto', 'browser_observe', 'browser_read', 'browser_screenshot', 'doctor'],
+    ['browser_goto', 'browser_observe', 'browser_read', 'browser_screenshot', 'browser_tabs', 'doctor'],
   );
-  // The two that can change the world stay out of it.
+  // The ones that can change the world stay out of it.
   assert.ok(!(RETRY_SAFE_TOOLS as readonly string[]).includes('browser_act'));
   assert.ok(!(RETRY_SAFE_TOOLS as readonly string[]).includes('js'));
+  // Selecting a tab rewrites the session's default target; a repeat is not harmless.
+  assert.ok(!(RETRY_SAFE_TOOLS as readonly string[]).includes('browser_tabs_select'));
 });
 
 test('a side-effecting tool is not repeated, and says so', async () => {
@@ -126,6 +128,71 @@ test('a side-effecting tool is not repeated, and says so', async () => {
   assert.equal(body.ok, false);
   assert.equal(downloads, 1, 'the action ran once; a retry would have run it twice');
   assert.equal(body.error.data.sessionReplaced, true);
+  assert.match(String(body.error.hint), /may already have happened/);
+  await client.close();
+});
+
+test('browser_tabs is retried after the page is replaced, and announces it', async () => {
+  const first = new FakePage();
+  const second = new FakePage();
+  (second as unknown as { id: string }).id = 'fake-2';
+  let lists = 0;
+
+  const firstSession: BrowserSession = {
+    ...sessionOf(first),
+    // A listing is read-only, so a dead session must not end the call.
+    tabList: async () => {
+      lists += 1;
+      throw new Error(DEAD);
+    },
+  } as BrowserSession;
+  const secondSession: BrowserSession = {
+    ...sessionOf(second),
+    tabList: async () => {
+      lists += 1;
+      return [{ id: 'fake-2', url: 'https://example.com/', title: 'second', currentTarget: true, foreground: true }];
+    },
+  } as BrowserSession;
+
+  let opens = 0;
+  const client = await clientFor(async () => {
+    opens += 1;
+    return opens === 1 ? firstSession : secondSession;
+  });
+  const body = bodyOf(await client.callTool({ name: 'browser_tabs', arguments: {} }));
+
+  assert.equal(lists, 2, 'the listing ran again on the replacement');
+  assert.equal(body.ok, true, 'the caller gets a result, not the dead-session error');
+  assert.equal(body.sessionReplaced, true, 'the retry is announced, not hidden');
+  assert.equal(body.tabs?.[0]?.id, 'fake-2', 'the tabs come from the replacement');
+  await client.close();
+});
+
+test('browser_tabs_select is not repeated, and says the action may already have happened', async () => {
+  const first = new FakePage();
+  const second = new FakePage();
+  let selects = 0;
+
+  const sideEffecting = (page: RuntimePage): BrowserSession =>
+    ({
+      ...sessionOf(page),
+      // Selecting rewrites the session default; repeating it is not harmless.
+      selectTab: async () => {
+        selects += 1;
+        throw new Error(DEAD);
+      },
+    }) as BrowserSession;
+
+  let opens = 0;
+  const client = await clientFor(async () => {
+    opens += 1;
+    return sideEffecting(opens === 1 ? first : second);
+  });
+  const body = bodyOf(await client.callTool({ name: 'browser_tabs_select', arguments: { id: 'fake-2' } }));
+
+  assert.equal(body.ok, false, 'the failure is reported rather than papered over');
+  assert.equal(selects, 1, 'the selection ran exactly once; it was not silently repeated');
+  assert.equal(body.error.data.sessionReplaced, true, 'the replacement is still named');
   assert.match(String(body.error.hint), /may already have happened/);
   await client.close();
 });

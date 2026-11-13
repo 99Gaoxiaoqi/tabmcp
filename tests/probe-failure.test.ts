@@ -324,6 +324,6 @@ test('focusDifference still names the only visible tab when one is visible', asy
   await other.activePage();
   const diff = await other.focusDifference();
   assert.ok(diff, 'the other visible tab is a real difference');
-  assert.notEqual(diff!.focused, diff!.current);
+  assert.notEqual(diff!.foreground, diff!.current);
   assert.ok(current.id);
 });

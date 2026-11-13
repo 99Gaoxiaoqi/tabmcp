@@ -15,7 +15,7 @@ import { createServer, matchCandidate } from '../src/mcp/server.js';
 import type { BrowserSession } from '../src/transport/cdp.js';
 import type { EvaluateOptions, RuntimePage } from '../src/transport/page.js';
 import type { ApiCandidate } from '../src/recon/capture.js';
-import { FakePage } from './mcp-fake.test.js';
+import { FakePage } from './helpers/fake.js';
 
 type Part = { type?: string; text?: string };
 type Envelope = { content?: Part[]; isError?: boolean };

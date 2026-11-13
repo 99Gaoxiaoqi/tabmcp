@@ -764,18 +764,28 @@ export class ExtensionSession implements BrowserSession {
       url: tab.url ?? '',
       title: tab.title ?? '',
       currentTarget: `ext-${tab.tabId}` === current,
-      // chrome.tabs.active is the browser's own answer to "is the user looking at it".
-      focused: Boolean(tab.active),
+      // Each tab answers for its own window: `chrome.tabs.active` is true for the active
+      // tab of *every* open window, so several tabs may report true at once. That is a
+      // correct per-tab fact, not a conflict. It still does not mean "the user is reading
+      // it": a minimised window, or a browser behind another app, keeps its tab active.
+      foreground: Boolean(tab.active),
     }));
   }
 
-  async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
+  async focusDifference(): Promise<{ current: string | null; foreground: string | null } | null> {
+    // `.filter(usable)` drops chrome:// pages. If the only active tab is one of those it
+    // never reaches this list, so `actives` is empty and we stay silent. That is the safe
+    // direction - silence, never a guess - and must not be "fixed" into a guess later.
     const tabs = (await this.tabs()).filter((tab) => ExtensionSession.usable(tab));
     const current = this.active && !this.active.isClosed() ? String(this.active.id) : null;
-    const front = tabs.find((tab) => tab.active);
-    const focused = front ? `ext-${front.tabId}` : null;
-    if (!focused || !current || focused === current) return null;
-    return { current, focused };
+    const actives = tabs.filter((tab) => tab.active);
+    // `chrome.tabs.query({})` spans every window, so two windows mean two active tabs and
+    // no way to say which window is in front. Same rule as the CDP channel: speak only
+    // when exactly one tab qualifies.
+    if (actives.length !== 1 || !current) return null;
+    const foreground = `ext-${actives[0]!.tabId}`;
+    if (foreground === current) return null;
+    return { current, foreground };
   }
 
   async selectTab(id: string): Promise<void> {

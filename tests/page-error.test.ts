@@ -1,8 +1,8 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Tab } from '../src/api/tab.js';
 import type { NavigationResult } from '../src/transport/page.js';
-import { FakePage } from './mcp-fake.test.js';
+import { FakePage } from './helpers/fake.js';
 
 /** A page whose landing URL and HTTP status the test decides. */
 class StatusPage extends FakePage {
