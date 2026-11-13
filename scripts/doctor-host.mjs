@@ -16,10 +16,22 @@
  * Nothing here writes. Not part of `verify`: a machine without Chrome installed is a
  * legitimate state, and a gate that fails on it would be turned off within a week.
  *
+ * Options:
+ *   --manifest <path>        inspect this manifest instead of the default one
+ *   --skip-registry          do not read the registry at all
+ *   --registry-value <path>  compare against this value instead of reading the registry
+ *                            (read-only; no test ever writes a registry key)
+ *
  * Exit codes:
  *   0  the three places agree and the executable exists
- *   1  they disagree, or the executable is gone (the report names which)
- *   2  the check cannot read what it needs (no config, or no manifest to inspect)
+ *   1  the host is not installed, or the places disagree (the report names which)
+ *   2  the check cannot start: host.config.json is missing or has no hostName
+ *
+ * "Not installed" is exit 1, not 2: the check ran and found something to report,
+ * and the report already says how to repair it. Exit 2 is reserved for not being able
+ * to know what to look for at all. (This file said the opposite for one commit; the
+ * behaviour was right and the docstring was wrong - found by verifying the branch
+ * instead of reading the code.)
  */
 
 import { execFileSync } from 'node:child_process';
@@ -97,6 +109,18 @@ if (!fs.existsSync(manifestPath)) {
 // 3. the registry value Chrome actually reads
 if (flag('--skip-registry')) {
   record('registry', 'skipped (--skip-registry)', 'ok');
+} else if (option('--registry-value') !== undefined) {
+  // Pretend the registry says this. Testing the comparison this way never writes a
+  // registry key: the value is the only thing the comparison needs, and a test that
+  // created real keys would have to clean them up - and would fail to clean up if it
+  // crashed first.
+  const value = option('--registry-value') ?? '';
+  record('registry default', `${value} (from --registry-value)`, 'ok');
+  record(
+    'registry matches manifest path',
+    value.toLowerCase() === manifestPath.toLowerCase() ? 'same' : 'differs',
+    value.toLowerCase() === manifestPath.toLowerCase() ? 'ok' : 'mismatch',
+  );
 } else {
   let output = '';
   try {

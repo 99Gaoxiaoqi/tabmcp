@@ -178,3 +178,71 @@ test('doctor-host: agreeing config, manifest and executable exit 0', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /is installed and points at an existing executable/);
 });
+
+// ---------------------------------------------- doctor-host: the "not installed" branch
+//
+// This branch was shipped unobserved ("the registry path only ran in the installed
+// state"), so these cases make it observable. Each one was first run by hand against
+// a throwaway repository to learn what the script actually does, then written down -
+// the exit code in particular: "not installed" is 1 (the check ran and found
+// something), while "cannot tell what to look for" is 2.
+
+test('doctor-host: an uninstalled host reports the missing manifest and exits 1', () => {
+  const repo = makeRepo(DOCTOR, { 'host.config.json': json({ hostName: 'com.local.fixture' }) });
+  const result = repo.run(process.env, ['--manifest', path.join(repo.dir, 'no-such-manifest.json'), '--skip-registry']);
+  assert.equal(result.status, 1, 'the check ran and found a problem, so this is 1, not 2');
+  assert.match(result.stdout, /MISS installed manifest/);
+  assert.match(result.stderr, /not usable as installed/);
+  assert.match(result.stderr, /setup:extension/, 'the report must say how to repair it');
+});
+
+test('doctor-host: a host that was never installed names both missing places', () => {
+  // No --manifest and no --skip-registry: the default %LOCALAPPDATA% manifest and the
+  // real registry key, both for a host name that cannot be installed. This is the
+  // exact scenario the branch exists for.
+  const repo = makeRepo(DOCTOR, { 'host.config.json': json({ hostName: 'com.local.never-installed' }) });
+  const result = repo.run();
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /MISS installed manifest/);
+  assert.match(result.stdout, /MISS registry/);
+  assert.match(result.stderr, /installed manifest:/);
+  assert.match(result.stderr, /registry:/);
+});
+
+test('doctor-host: without host.config.json it cannot start, and says so with exit 2', () => {
+  const repo = makeRepo(DOCTOR, { 'unrelated.txt': 'nothing here\n' });
+  const result = repo.run();
+  assert.equal(result.status, 2, 'nothing to look for is not the same as looking and finding nothing');
+  assert.match(result.stderr, /cannot read host\.config\.json/);
+});
+
+test('doctor-host: a config without hostName exits 2 instead of guessing a name', () => {
+  const repo = makeRepo(DOCTOR, { 'host.config.json': json({ wrongKey: 1 }) });
+  const result = repo.run();
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /must contain a "hostName" string/);
+});
+test('doctor-host: a registry value that points somewhere else exits 1 and names it', () => {
+  // The comparison is the point of the tool, and it was the last unobserved branch.
+  // `--registry-value` supplies what the registry would say, so the test never writes
+  // a registry key - and therefore never leaves one behind if it crashes.
+  const repo = makeRepo(DOCTOR, doctorFiles({ name: 'com.local.fixture', path: 'stub.exe' }));
+  const elsewhere = path.join(os.tmpdir(), 'some-other-place.json');
+  const result = repo.run(process.env, [
+    '--manifest',
+    path.join(repo.dir, 'installed.json'),
+    '--registry-value',
+    elsewhere,
+  ]);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /DIFF registry matches manifest path\s+differs/);
+  assert.match(result.stderr, /registry matches manifest path: differs/);
+});
+
+test('doctor-host: a registry value that matches the manifest exits 0', () => {
+  const repo = makeRepo(DOCTOR, doctorFiles({ name: 'com.local.fixture', path: 'stub.exe' }));
+  const manifest = path.join(repo.dir, 'installed.json');
+  const result = repo.run(process.env, ['--manifest', manifest, '--registry-value', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /registry matches manifest path\s+same/);
+});
