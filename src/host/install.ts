@@ -18,7 +18,7 @@ import { ActionError } from '../core/errors.js';
  * registry key, the host manifest, and the extension's connectNative call. It is
  * written once in host.config.json and read from there.
  *
- * Two rules, both learned the hard way:
+ * Three rules, all learned the hard way:
  *
  *  1. Look next to this file, never in the process cwd. A cwd-relative lookup makes
  *     the same checkout install under two different names depending on where you
@@ -29,36 +29,77 @@ import { ActionError } from '../core/errors.js';
  *     which surfaces as "the extension is listed, nothing errors, every call fails".
  *     `scripts/doctor-host.mjs` already refuses to guess about this same fact; making
  *     one component shout and the other invent a value was the actual defect.
+ *  3. "Missing" and "found but unusable" are different facts and get different
+ *     sentences. A reader told "not found" goes looking for a file that is right
+ *     there - the same mismatch this repository keeps finding in other forms.
+ *
+ * The lookup is a pure function of the module URL so the walk can be tested as
+ * strings; `hostName()` is only the binding to this module's own location.
  */
-export function hostName(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // dist/src/host -> repository root, and the same walk one level up in case the
-    // build layout changes.
+export type CandidateResult = 'missing' | 'unreadable' | 'no-hostName';
+
+export interface CandidateOutcome {
+  path: string;
+  result: CandidateResult;
+}
+
+/** Pure: where to look, given where this module lives. */
+export function hostConfigCandidates(moduleUrl: string | URL): string[] {
+  // fileURLToPath, not pathname string surgery: a pathname keeps percent-encoding and
+  // mangles spaces, CJK and UNC prefixes (`\\server\share`).
+  const here = path.dirname(fileURLToPath(moduleUrl));
+  return [
+    // dist/src/host -> repository root, and one level up in case the layout changes.
     path.join(here, '..', '..', '..', 'host.config.json'),
     path.join(here, '..', '..', 'host.config.json'),
   ];
-  const seen: string[] = [];
-  for (const candidate of candidates) {
-    seen.push(candidate);
-    try {
-      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8').replace(/^\uFEFF/, '')) as { hostName?: string };
-      if (parsed.hostName) return parsed.hostName;
-    } catch {
-      // try the next location
-    }
-  }
-  throw new ActionError(
-    'E_PRECONDITION_FAILED',
-    'host.config.json with a hostName was not found next to this package',
-    {
-      hint: 'The host name must be one value, not a guess. Restore host.config.json or re-run npm run setup:extension from a complete checkout.',
-      data: { looked: seen },
-    },
-  );
 }
 
-export const HOST_NAME = hostName();
+/** Reads the first candidate that yields a name, reporting what happened at every stop. */
+export function readHostName(candidates: string[]): { name: string; looked: CandidateOutcome[] } {
+  const looked: CandidateOutcome[] = [];
+  for (const candidate of candidates) {
+    let text: string;
+    try {
+      text = fs.readFileSync(candidate, 'utf8');
+    } catch {
+      looked.push({ path: candidate, result: 'missing' });
+      continue;
+    }
+    let parsed: { hostName?: string };
+    try {
+      parsed = JSON.parse(text.replace(/^\uFEFF/, '')) as { hostName?: string };
+    } catch {
+      looked.push({ path: candidate, result: 'unreadable' });
+      continue;
+    }
+    if (typeof parsed.hostName === 'string' && parsed.hostName !== '') {
+      return { name: parsed.hostName, looked };
+    }
+    looked.push({ path: candidate, result: 'no-hostName' });
+  }
+
+  const unreadable = looked.filter((entry) => entry.result === 'unreadable');
+  const empty = looked.filter((entry) => entry.result === 'no-hostName');
+  const message = unreadable.length
+    ? `host.config.json could not be parsed: ${unreadable.map((entry) => entry.path).join(', ')}`
+    : empty.length
+      ? `host.config.json has no hostName: ${empty.map((entry) => entry.path).join(', ')}`
+      : 'host.config.json was not found next to this package';
+  throw new ActionError('E_PRECONDITION_FAILED', message, {
+    hint: 'The host name must be one value, not a guess. Restore host.config.json or re-run npm run setup:extension from a complete checkout.',
+    data: { looked },
+  });
+}
+
+/**
+ * Resolved when it is needed, not when the module is imported: a prerequisite should
+ * fail at the moment of use, so the stack points at the caller instead of at some
+ * consumer that merely imported this file.
+ */
+export function hostName(): string {
+  return readHostName(hostConfigCandidates(import.meta.url)).name;
+}
 
 
 export interface InstallOptions {
@@ -80,7 +121,7 @@ export interface InstallResult {
 function hostManifestPath(): string {
   const base = path.join(os.homedir(), 'AppData', 'Local', 'tabmcp');
   fs.mkdirSync(base, { recursive: true });
-  return path.join(base, `${HOST_NAME}.json`);
+  return path.join(base, `${hostName()}.json`);
 }
 
 export function install(options: InstallOptions): InstallResult {
@@ -101,7 +142,7 @@ export function install(options: InstallOptions): InstallResult {
     );
   }
   const manifest = {
-    name: HOST_NAME,
+    name: hostName(),
     description: 'TabMCP host',
     path: node,
     type: 'stdio',
@@ -111,7 +152,7 @@ export function install(options: InstallOptions): InstallResult {
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
   // Chrome on Windows resolves native hosts from HKCU, not PATH.
-  const registryKey = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
+  const registryKey = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName()}`;
   execFileSync('reg', ['add', registryKey, '/ve', '/t', 'REG_SZ', '/d', manifestPath, '/f'], { stdio: 'pipe' });
 
   return { manifestPath, registryKey, extensionId: options.extensionId };
@@ -121,7 +162,7 @@ export function uninstall(): void {
   const manifestPath = hostManifestPath();
   fs.rmSync(manifestPath, { force: true });
   try {
-    execFileSync('reg', ['delete', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`, '/f'], {
+    execFileSync('reg', ['delete', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName()}`, '/f'], {
       stdio: 'pipe',
     });
   } catch {
