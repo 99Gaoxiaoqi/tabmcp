@@ -9,9 +9,18 @@
  */
 import fs from 'node:fs';
 
+// The same rule `isValidHostName` applies in src/host/install.ts, inlined because this
+// script must run before the build. A test runs both over one fixture set and fails if
+// they ever disagree - the point is not to write it twice, it is to never let the two
+// readers of this single value decide differently.
+const HOST_NAME_PATTERN = /^[a-z0-9_]+(\.[a-z0-9_]+)*$/;
+
 const source = JSON.parse(fs.readFileSync('host.config.json', 'utf8').replace(/^\uFEFF/, ''));
-if (!source.hostName || typeof source.hostName !== 'string') {
-  console.error('host.config.json must contain a "hostName" string');
+if (typeof source.hostName !== 'string' || !HOST_NAME_PATTERN.test(source.hostName)) {
+  console.error(
+    'host.config.json must contain a "hostName" Chrome accepts (lowercase letters, digits, underscore and dots), got ' +
+      JSON.stringify(source.hostName),
+  );
   process.exit(2);
 }
 

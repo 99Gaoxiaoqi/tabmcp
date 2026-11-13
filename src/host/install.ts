@@ -36,11 +36,30 @@ import { ActionError } from '../core/errors.js';
  * The lookup is a pure function of the module URL so the walk can be tested as
  * strings; `hostName()` is only the binding to this module's own location.
  */
-export type CandidateResult = 'missing' | 'unreadable' | 'no-hostName';
+export type CandidateResult = 'missing' | 'unreadable' | 'no-hostName' | 'invalid-hostName';
 
 export interface CandidateOutcome {
   path: string;
   result: CandidateResult;
+  /** For 'invalid-hostName': what the file actually held. Never a host name in disguise. */
+  value?: unknown;
+}
+
+/**
+ * Whether Chrome would accept this native messaging host name.
+ *
+ * The rule is Chrome's, not ours: lowercase letters, digits, underscores and dots, no
+ * leading or trailing dot, no two consecutive dots. Anything else is accepted by an
+ * installation and then refused at `connectNative` time, which is the worst place to
+ * find out.
+ *
+ * Exported because two readers exist - this module writes the registry key and the host
+ * manifest, `scripts/generate-host-config.mjs` writes the extension's copy - and they must
+ * agree on what a valid name is. A file with one reader checking the type and the other
+ * checking truthiness is how `{"hostName":123}` gets installed.
+ */
+export function isValidHostName(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(value);
 }
 
 /** Pure: where to look, given where this module lives. */
@@ -59,33 +78,50 @@ export function hostConfigCandidates(moduleUrl: string | URL): string[] {
 export function readHostName(candidates: string[]): { name: string; looked: CandidateOutcome[] } {
   const looked: CandidateOutcome[] = [];
   for (const candidate of candidates) {
+    // Ask "is it there" separately from "can I read it". Deriving 'missing' from a thrown
+    // read error would label EACCES or EISDIR as absence, which is the same class of
+    // mistake this function exists to stop, one level down.
+    if (!fs.existsSync(candidate)) {
+      looked.push({ path: candidate, result: 'missing' });
+      continue;
+    }
     let text: string;
     try {
       text = fs.readFileSync(candidate, 'utf8');
     } catch {
-      looked.push({ path: candidate, result: 'missing' });
+      looked.push({ path: candidate, result: 'unreadable' });
       continue;
     }
-    let parsed: { hostName?: string };
+    let parsed: { hostName?: unknown };
     try {
-      parsed = JSON.parse(text.replace(/^\uFEFF/, '')) as { hostName?: string };
+      parsed = JSON.parse(text.replace(/^\uFEFF/, '')) as { hostName?: unknown };
     } catch {
       looked.push({ path: candidate, result: 'unreadable' });
       continue;
     }
-    if (typeof parsed.hostName === 'string' && parsed.hostName !== '') {
-      return { name: parsed.hostName, looked };
+    if (parsed.hostName === undefined) {
+      looked.push({ path: candidate, result: 'no-hostName' });
+      continue;
     }
-    looked.push({ path: candidate, result: 'no-hostName' });
+    if (!isValidHostName(parsed.hostName)) {
+      looked.push({ path: candidate, result: 'invalid-hostName', value: parsed.hostName });
+      continue;
+    }
+    return { name: parsed.hostName, looked };
   }
 
-  const unreadable = looked.filter((entry) => entry.result === 'unreadable');
-  const empty = looked.filter((entry) => entry.result === 'no-hostName');
-  const message = unreadable.length
-    ? `host.config.json could not be parsed: ${unreadable.map((entry) => entry.path).join(', ')}`
-    : empty.length
-      ? `host.config.json has no hostName: ${empty.map((entry) => entry.path).join(', ')}`
-      : 'host.config.json was not found next to this package';
+  const byResult = (result: CandidateResult) => looked.filter((entry) => entry.result === result);
+  const paths = (result: CandidateResult) => byResult(result).map((entry) => entry.path).join(', ');
+  const invalid = byResult('invalid-hostName');
+  const message = invalid.length
+    ? `host.config.json has a hostName Chrome would not accept (lowercase letters, digits, underscore and dots): ${invalid
+        .map((entry) => `${entry.path} holds ${JSON.stringify(entry.value)}`)
+        .join(', ')}`
+    : byResult('unreadable').length
+      ? `host.config.json could not be parsed: ${paths('unreadable')}`
+      : byResult('no-hostName').length
+        ? `host.config.json has no hostName: ${paths('no-hostName')}`
+        : 'host.config.json was not found next to this package';
   throw new ActionError('E_PRECONDITION_FAILED', message, {
     hint: 'The host name must be one value, not a guess. Restore host.config.json or re-run npm run setup:extension from a complete checkout.',
     data: { looked },

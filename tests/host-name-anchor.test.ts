@@ -55,9 +55,9 @@ test('a valid config is used and the walk stops there', () => {
   const dir = tempDir();
   try {
     const good = path.join(dir, 'host.config.json');
-    fs.writeFileSync(good, JSON.stringify({ hostName: 'com.acme.CUSTOM' }), 'utf8');
+    fs.writeFileSync(good, JSON.stringify({ hostName: 'acme.custom' }), 'utf8');
     const { name, looked } = readHostName([path.join(dir, 'nope.json'), good]);
-    assert.equal(name, 'com.acme.CUSTOM');
+    assert.equal(name, 'acme.custom');
     // Looking is reported in the order it happened, not as a design-time list.
     assert.deepEqual(looked, [{ path: path.join(dir, 'nope.json'), result: 'missing' }]);
   } finally {
@@ -115,7 +115,7 @@ test('the package reports its own name whatever directory the process started in
   const code = `import(${JSON.stringify(pathToFileURL(INSTALL_JS).href)}).then((m) => process.stdout.write(m.hostName()));`;
 
   const decoyDir = tempDir();
-  fs.writeFileSync(path.join(decoyDir, 'host.config.json'), JSON.stringify({ hostName: 'com.example.DECOY' }), 'utf8');
+  fs.writeFileSync(path.join(decoyDir, 'host.config.json'), JSON.stringify({ hostName: 'com.example.decoy' }), 'utf8');
   try {
     const fromDecoy = execFileSync(process.execPath, ['-e', code], { cwd: decoyDir, encoding: 'utf8' }).trim();
     assert.equal(fromDecoy, expected, 'a config in the working directory must not rename the host');
