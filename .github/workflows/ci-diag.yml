@@ -1,0 +1,37 @@
+name: ci-diag
+
+on:
+  push:
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: pin npm
+        run: npm install -g npm@10.9.8
+      - name: what is the environment
+        run: |
+          npm --version
+          npm config get cache
+          npm config get registry
+          node -e "console.log('npm_config_cache=' + process.env.npm_config_cache)"
+          node -e "console.log('NODE_OPTIONS=' + process.env.NODE_OPTIONS)"
+      - name: A: npm ci with a workspace cache
+        continue-on-error: true
+        run: npm ci --cache .npm-cache --no-audit --no-fund
+      - name: B: npm install
+        continue-on-error: true
+        run: npm install --no-audit --no-fund
+      - name: C: npm ci without cache dir
+        continue-on-error: true
+        run: |
+          Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+          npm ci --no-audit --no-fund
+      - name: outcomes
+        run: |
+          Write-Host "A=${{ steps.a.outcome }} B=${{ steps.b.outcome }} C=${{ steps.c.outcome }}"
