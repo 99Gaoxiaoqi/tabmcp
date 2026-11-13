@@ -20,8 +20,17 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # The runner's bundled npm (11.x on this image) dies with "Exit handler never
+      # called!" before installing anything. 10.9.8 is the version this project is
+      # developed and verified with, so CI uses the same one instead of hoping.
+      - name: pin npm
+        run: npm install -g npm@10.9.8
+
       - name: install
-        run: npm ci
+        run: |
+          npm --version
+          node --version
+          npm ci --no-audit --no-fund
 
       # The skip is in the step name on purpose: a reader must not have to open the log
       # to learn that the browser-backed test did not run here.
