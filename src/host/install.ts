@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { ActionError } from '../core/errors.js';
 
@@ -16,14 +17,30 @@ import { ActionError } from '../core/errors.js';
  * The native host name is the one string that must agree in three places: the
  * registry key, the host manifest, and the extension's connectNative call. It is
  * written once in host.config.json and read from there.
+ *
+ * Two rules, both learned the hard way:
+ *
+ *  1. Look next to this file, never in the process cwd. A cwd-relative lookup makes
+ *     the same checkout install under two different names depending on where you
+ *     stood when you ran it, and a stray host.config.json in an unrelated directory
+ *     wins over the repository's own.
+ *  2. If the name cannot be read, say so. Returning a hardcoded default invents a
+ *     plausible value - the outcome is a host registered under a name nothing calls,
+ *     which surfaces as "the extension is listed, nothing errors, every call fails".
+ *     `scripts/doctor-host.mjs` already refuses to guess about this same fact; making
+ *     one component shout and the other invent a value was the actual defect.
  */
 export function hostName(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.join(process.cwd(), 'host.config.json'),
-    path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'host.config.json'),
-    path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', '..', 'host.config.json'),
+    // dist/src/host -> repository root, and the same walk one level up in case the
+    // build layout changes.
+    path.join(here, '..', '..', '..', 'host.config.json'),
+    path.join(here, '..', '..', 'host.config.json'),
   ];
+  const seen: string[] = [];
   for (const candidate of candidates) {
+    seen.push(candidate);
     try {
       const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8').replace(/^\uFEFF/, '')) as { hostName?: string };
       if (parsed.hostName) return parsed.hostName;
@@ -31,7 +48,14 @@ export function hostName(): string {
       // try the next location
     }
   }
-  return 'com.local.tabmcp';
+  throw new ActionError(
+    'E_PRECONDITION_FAILED',
+    'host.config.json with a hostName was not found next to this package',
+    {
+      hint: 'The host name must be one value, not a guess. Restore host.config.json or re-run npm run setup:extension from a complete checkout.',
+      data: { looked: seen },
+    },
+  );
 }
 
 export const HOST_NAME = hostName();
