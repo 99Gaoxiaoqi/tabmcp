@@ -82,9 +82,12 @@ test('no browser: a browser tool answers E_NO_BROWSER with a hint', async () => 
 
 test('no browser: adapter and site tools answer E_NO_BROWSER, not a crash', async () => {
   const client = await refused();
+  // site_run is deliberately absent: with no adapters installed it answers
+  // E_TARGET_NOT_FOUND before it ever asks for a browser, so it cannot prove this.
   for (const [name, args] of [
-    ['site_run', { site: 'juejin', command: 'search', args: { query: 'x' } }],
     ['browser_network_read', {}],
+    ['browser_cookies', { domain: 'example.com' }],
+    ['browser_screenshot', {}],
   ] as const) {
     const result = await client.callTool({ name, arguments: args as Record<string, unknown> });
     const body = JSON.parse(bodyOf(result));
