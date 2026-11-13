@@ -55,8 +55,10 @@ Rules that matter:
 - An adapter that declares \`domain\` expects the tab to be on that site: \`site_run\`
   refuses with \`E_WRONG_SITE\` (and names both hosts) instead of letting the fetch fail
   as "Failed to fetch". Pass \`navigate:true\` to open the domain first.
-- A draft must be verified before activation: \`expect\` (minRows / result_path / text)
-  is how a draft proves it works.
+- A draft returned by \`recon_draft\` is text: you finish the TODOs and save the file
+  yourself. Nothing stores it and nothing activates it. (The sources contain a
+  \`DraftStore\` class with a verify-then-activate flow, but no product code constructs
+  it, so treat it as unused rather than as a gate you must pass.)
 
 Write them with the REPL: explore with \`tab.*\`, confirm the shape, then save the file.
 `;

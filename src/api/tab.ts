@@ -105,7 +105,12 @@ export interface ActResult {
   effect: ActionEffect;
   url?: string;
   revision: number;
-  settled: boolean;
+  /**
+   * `true` = the page went quiet, `false` = still busy, `'unknown'` = the observation
+   * itself failed so we do not know. Three states, because "we could not look" used to be
+   * reported as a definite answer.
+   */
+  settled: boolean | 'unknown';
   pendingRequests?: number;
 }
 
@@ -312,6 +317,16 @@ export class Tab {
         tuning: this.tuning,
       });
     } catch {
+      // waitForTarget swallows a failing probe, so arriving here proves only that no probe
+      // returned true in time — not that the element is absent. Ask once more and keep the
+      // two answers apart: "the element is not there" is a fact about the page, "the page
+      // did not answer" is a fact about us, and only the first one justifies "not visible".
+      const present = await this.selectorVisible(selector);
+      if (present === null) {
+        throw new ActionError('E_REF_STALE', `Ref ${options.ref} could not be checked: the page did not answer`, {
+          hint: 'The page was navigating or detached. Call observe() again and retry with a fresh ref.',
+        });
+      }
       throw new ActionError('E_TARGET_NOT_FOUND', `Ref ${options.ref} is not visible`, {
         hint: 'The element may be hidden or removed; call observe() again.',
       });
@@ -358,20 +373,33 @@ export class Tab {
       effect: effect.effect,
       ...(effect.url !== undefined ? { url: effect.url } : {}),
       revision: this.refs.current?.revision ?? 0,
-      settled: settleResult.quiet,
+      // probeFailed means the activity probe threw, so "quiet" was never observed. Saying
+      // false there would claim "still busy"; the truth is that nobody looked.
+      settled: settleResult.probeFailed ? 'unknown' : settleResult.quiet,
       ...(settleResult.quiet ? {} : { pendingRequests: settleResult.pendingRequests }),
     };
   }
 
-  /** True when the selector matches a visible element right now. */
-  private async selectorVisible(selector: string): Promise<boolean> {
-    return this.page.evaluate<boolean>(`(() => {
+  /**
+   * True when the selector matches a visible element; **null when the page would not
+   * answer**.
+   *
+   * It used to return false for both, which made an evaluate failure indistinguishable
+   * from a hidden element: the caller then reported "not visible" about a page it had
+   * never managed to inspect. Keeping the two apart is the whole point of this method.
+   */
+  private async selectorVisible(selector: string): Promise<boolean | null> {
+    try {
+      return await this.page.evaluate<boolean>(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return false;
       const r = el.getBoundingClientRect();
       const s = getComputedStyle(el);
       return r.width >= 1 && r.height >= 1 && s.visibility !== 'hidden' && s.display !== 'none';
-    })()`).catch(() => false);
+    })()`);
+    } catch {
+      return null;
+    }
   }
 
   private async perform(options: ActOptions, selector: string, timeoutMs: number): Promise<void> {
@@ -429,6 +457,13 @@ export class Tab {
       try {
         await this.page.waitForSelector(selector, 3000, 'attached');
       } catch {
+        // docId null means the page never identified itself, so a missing selector says
+        // nothing about whether the element was removed.
+        if (docId === null) {
+          throw new ActionError('E_REF_STALE', `Ref ${target} could not be located: the page did not identify itself`, {
+            hint: 'The page may be navigating or detached. Call observe() again and retry.',
+          });
+        }
         throw new ActionError('E_TARGET_NOT_FOUND', `Ref ${target} is not present`, {
           hint: 'Call observe() again; the element was removed.',
         });

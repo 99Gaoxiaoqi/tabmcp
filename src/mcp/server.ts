@@ -18,7 +18,7 @@ import { findAdapter, loadAdapters, searchAdapters, type AdapterCatalog } from '
 import { checkExpectation, runAdapter } from '../adapters/runner.js';
 import { JsSession } from '../repl/session.js';
 import { createReplGlobals } from '../repl/facade.js';
-import { ReconRecorder, draftFromCandidate } from '../recon/capture.js';
+import { ReconRecorder, draftFromCandidate, type ApiCandidate } from '../recon/capture.js';
 import { DOCS, docsIndex, getDoc, listDocs } from '../docs/index.js';
 import { placeDownload } from '../core/downloads.js';
 
@@ -67,6 +67,26 @@ export function hostMatches(url: string, domain: string): boolean {
 
 function text(value: unknown): { type: 'text'; text: string } {
   return { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) };
+}
+
+/**
+ * Candidate ids are case-sensitive `METHOD path` keys, which is a fine key and a poor
+ * thing to ask a caller to reproduce by hand: an agent that saw `GET /api/items` in a
+ * report should not fail because it typed `get /api/items` or pasted only the path.
+ *
+ * Tried in order: exact key, case-insensitive key, path substring. Ambiguous input
+ * resolves to the first candidate, which the report's most-used-first order makes the
+ * sensible guess.
+ */
+export function matchCandidate(candidates: ApiCandidate[], wanted: string): ApiCandidate | undefined {
+  const needle = wanted.trim().toLowerCase();
+  if (!needle) return undefined;
+  const byPath = (value: string): boolean => value.toLowerCase().includes(needle);
+  return (
+    candidates.find((candidate) => candidate.id.toLowerCase() === needle) ??
+    candidates.find((candidate) => byPath(candidate.path)) ??
+    candidates.find((candidate) => byPath(`${candidate.method} ${candidate.path}`))
+  );
 }
 
 export function createServer(context: ServerContext): McpServer {
@@ -131,6 +151,19 @@ export function createServer(context: ServerContext): McpServer {
     return message && looksDeadMessage(message) ? message : null;
   };
 
+  /**
+   * Stickiness is deliberate, so the target does not follow the user's foreground tab.
+   * What must not happen is acting on a background tab without saying so.
+   */
+  const focusDifference = async (toolName: string): Promise<{ current: string | null; focused: string | null } | null> => {
+    if (toolName === 'browser_tabs' || toolName === 'browser_tabs_select' || toolName === 'doctor') return null;
+    const session = context.session as BrowserSession & {
+      focusDifference?: () => Promise<{ current: string | null; focused: string | null } | null>;
+    };
+    if (typeof session.focusDifference !== 'function') return null;
+    return session.focusDifference().catch(() => null);
+  };
+
   const withNotice = (body: unknown, notice: SessionNotice | null): unknown => {
     if (!notice || !body || typeof body !== 'object' || Array.isArray(body)) return body;
     const result = { ...(body as Record<string, unknown>) };
@@ -159,6 +192,38 @@ export function createServer(context: ServerContext): McpServer {
    * replacement. The text body is JSON for all tools except docs_get, whose prose is
    * left untouched.
    */
+  /**
+   * The structured body is not always the first content part: `browser_observe` and
+   * `browser_read` lead with their compact prose so a reader gets the page, not a code
+   * block, and carry the same facts as JSON in a second part.
+   *
+   * Looking only at index 0 made those two tools silently ineligible for session
+   * recovery and for the `sessionReplaced` notice: the parse threw, the code treated
+   * that as "no cause" and "prose stays prose". Find the JSON part instead.
+   */
+  const jsonPartIndex = (result: { content: { type: 'text'; text: string }[] }): number =>
+    result.content.findIndex((part) => {
+      if (part.type !== 'text') return false;
+      try {
+        const parsed: unknown = JSON.parse(part.text);
+        return Boolean(parsed) && typeof parsed === 'object';
+      } catch {
+        return false;
+      }
+    });
+
+  /** Replace one content part in place, leaving every other part byte-identical. */
+  const replacePart = (
+    result: { content: { type: 'text'; text: string }[] },
+    index: number,
+    value: unknown,
+  ): { content: { type: 'text'; text: string }[] } => ({
+    ...result,
+    content: result.content.map((part, i) =>
+      i === index ? { ...part, text: JSON.stringify(value, null, 2) } : part,
+    ),
+  });
+
   const originalRegisterTool = server.registerTool.bind(server);
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
@@ -169,12 +234,14 @@ export function createServer(context: ServerContext): McpServer {
       let result = await handler(...args);
       let notice = takeSessionNotice();
       if (!notice?.replaced) {
-        const first = result.content[0];
         let cause: string | null = null;
-        try {
-          cause = deadCause(JSON.parse(first.text));
-        } catch {
-          cause = null;
+        const idx = jsonPartIndex(result);
+        if (idx >= 0) {
+          try {
+            cause = deadCause(JSON.parse(result.content[idx].text));
+          } catch {
+            cause = null;
+          }
         }
         if (cause && (await recoverSession(cause))) {
           if (RETRY_SAFE.has(name)) {
@@ -185,36 +252,37 @@ export function createServer(context: ServerContext): McpServer {
             // Resolve first: the notice only knows which page took over once one is asked for.
             await resolveCurrentPage();
             const info = takeSessionNotice();
-            const first = result.content[0];
-            let body: unknown;
-            try {
-              body = JSON.parse(first.text);
-            } catch {
-              body = null;
-            }
-            if (body) {
-              result = {
-                ...result,
-                content: [
-                  { ...first, text: JSON.stringify(annotateReplacedError(body, info, cause), null, 2) },
-                  ...result.content.slice(1),
-                ],
-              };
+            const after = jsonPartIndex(result);
+            if (after >= 0) {
+              try {
+                const body: unknown = JSON.parse(result.content[after].text);
+                result = replacePart(result, after, annotateReplacedError(body, info, cause));
+              } catch {
+                // Unparseable stays untouched; nothing was rewritten.
+              }
             }
             notice = null;
           }
         }
       }
-      if (!notice) return result;
-      const first = result.content[0];
+      // Stickiness is deliberate; acting on a tab the user is not looking at is not
+      // something the caller should have to infer from a url.
+      const diff = await focusDifference(name);
+      if (!notice && !diff) return result;
+      const idx = jsonPartIndex(result);
+      if (idx < 0) return result; // prose stays prose
       let parsed: unknown;
       try {
-        parsed = JSON.parse(first.text);
+        parsed = JSON.parse(result.content[idx].text);
       } catch {
-        return result; // prose stays prose
+        return result;
       }
       const merged = withNotice(parsed, notice);
-      return { ...result, content: [{ ...first, text: JSON.stringify(merged, null, 2) }, ...result.content.slice(1)] };
+      const withFocus =
+        diff && merged && typeof merged === 'object' && !Array.isArray(merged)
+          ? { ...(merged as Record<string, unknown>), tabFocusDiffers: diff }
+          : merged;
+      return replacePart(result, idx, withFocus);
     }) as never);
 
   const tabFor = async (): Promise<Tab> => {
@@ -277,12 +345,32 @@ export function createServer(context: ServerContext): McpServer {
           report.connected = true;
           report.tabs = tabs.length;
           const active = await context.session.activePage();
+          // These two getters exist on the Playwright-backed page but are not part of the
+          // RuntimePage contract, so read them defensively. Without doctor surfacing them
+          // the only symptom of a failed attach or a failed observer install is "every
+          // action waited out its cap" - a fact nobody can act on.
+          const diagnostics = active as RuntimePage & {
+            networkDiagnostics?: string;
+            activityDiagnostics?: string;
+          };
+          const networkError = diagnostics.networkDiagnostics;
+          const activityError = diagnostics.activityDiagnostics;
           report.activeTab = {
             id: active.id,
             url: await active.url().catch(() => ''),
             title: await active.title().catch(() => ''),
             retention: active.retention ?? null,
+            ...(networkError ? { networkError } : {}),
+            ...(activityError ? { activityError } : {}),
           };
+          // Attach failures are session-scoped (a page that refused the debugger), so they
+          // are reported beside the tab, not inside it.
+          const withAttach = context.session as BrowserSession & {
+            networkAttachDiagnostics?: () => Array<{ url: string; error: string }>;
+          };
+          const attachErrors =
+            typeof withAttach.networkAttachDiagnostics === 'function' ? withAttach.networkAttachDiagnostics() : [];
+          if (attachErrors.length) report.networkAttachErrors = attachErrors;
           const frames = await active.frames().catch(() => []);
           report.frames = frames.length;
         } catch (err) {
@@ -309,6 +397,63 @@ export function createServer(context: ServerContext): McpServer {
         }
         report.repl = { bound: repl?.bindingCount ?? 0 };
         return { content: [text(report)] };
+      }),
+  );
+
+  server.registerTool(
+    'browser_tabs',
+    {
+      title: 'List tabs',
+      description:
+        'List every tab this session may use: id, url, title, whether it is the current target, ' +
+        'and whether the user is looking at it. Use the ids with browser_tabs_select.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () =>
+      run(async () => {
+        try {
+          const session = context.session as BrowserSession & {
+            tabList?: () => Promise<Array<{ id: string; url: string; title: string; currentTarget: boolean; focused: boolean }>>;
+          };
+          if (typeof session.tabList !== 'function') {
+            throw new ActionError('E_TARGET_UNSUPPORTED', 'this transport cannot list tabs', {
+              hint: 'Use doctor for the current tab.',
+            });
+          }
+          const tabs = await session.tabList();
+          return { content: [text({ ok: true, count: tabs.length, tabs })] };
+        } catch (err) {
+          return { content: [text(toEnvelope(err))], isError: true };
+        }
+      }),
+  );
+
+  server.registerTool(
+    'browser_tabs_select',
+    {
+      title: 'Choose the target tab',
+      description:
+        'Make one tab the default target for later calls. This is sticky - it does not follow ' +
+        'the foreground tab, and it does not bring the tab to the front.',
+      inputSchema: {
+        id: z.string().describe('Tab id from browser_tabs (e.g. pw-1a2b3c4d or ext-123)'),
+      },
+    },
+    async ({ id }) =>
+      run(async () => {
+        try {
+          const session = context.session as BrowserSession & { selectTab?: (tabId: string) => Promise<void> };
+          if (typeof session.selectTab !== 'function') {
+            throw new ActionError('E_TARGET_UNSUPPORTED', 'this transport cannot select a tab', {
+              hint: 'Use doctor to see the current tab.',
+            });
+          }
+          await session.selectTab(id);
+          return { content: [text({ ok: true, selected: id })] };
+        } catch (err) {
+          return { content: [text(toEnvelope(err))], isError: true };
+        }
       }),
   );
 
@@ -342,14 +487,40 @@ export function createServer(context: ServerContext): McpServer {
         'List the API endpoints observed since recon_start, most-used first, with method, path, status and query parameter names.',
       inputSchema: {
         stop: z.boolean().optional().describe('Stop recording before reporting'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Max candidates to return (default 30)'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ stop }) =>
+    async ({ stop, limit }) =>
       run(async () => {
         if (stop) recon.stop();
         const report = recon.report();
-        return { content: [text({ ok: true, ...report })] };
+        const cap = limit ?? 30;
+        const total = report.candidates.length;
+        // lastRequestId is a recorder-internal handle (a CDP request id). It was being
+        // returned, where it only ever read as a cursor that could be passed back.
+        const candidates = report.candidates
+          .slice(0, cap)
+          .map(({ lastRequestId: _ignored, ...rest }) => rest);
+        return {
+          content: [
+            text({
+              ok: true,
+              active: report.active,
+              requests: report.requests,
+              ignored: report.ignored,
+              total,
+              hasMore: total > cap,
+              candidates,
+            }),
+          ],
+        };
       }),
   );
 
@@ -367,7 +538,7 @@ export function createServer(context: ServerContext): McpServer {
     },
     async ({ id, site }) =>
       run(async () => {
-        const candidate = recon.get(id);
+        const candidate = recon.get(id) ?? matchCandidate(recon.report().candidates, id);
         if (!candidate) {
           throw new ActionError('E_TARGET_NOT_FOUND', `no recorded endpoint "${id}"`, {
             hint: 'Call recon_report to list what was recorded.',
@@ -378,23 +549,34 @@ export function createServer(context: ServerContext): McpServer {
       }),
   );
 
+  // The doc names in the description are derived, not typed out here: the hand-written
+  // list had already drifted (it was missing `tools` and `channels`), and a description
+  // that lies about its own inventory is the cheapest possible wrong answer.
+  const docNames = listDocs()
+    .map((doc) => doc.name)
+    .join(', ');
+
   server.registerTool(
     'docs_get',
     {
       title: 'Read a doc',
-      description: 'No name lists the docs. With a name, returns that doc: quickstart, adapters, recon.',
-      inputSchema: {
-        name: z.string().optional().describe('Doc name; omit to list'),
-      },
+      description: `No name lists the docs. With a name, returns that doc: ${docNames}. Arguments other than name are rejected, so a typo does not silently return the index instead.`,
+      // `.strict()` rather than a raw shape: an unknown key must be an error. Called with
+      // {"topic":"tools"} this used to answer with the index and isError:false in 2ms.
+      inputSchema: z
+        .object({
+          name: z.string().optional().describe('Doc name; omit to list'),
+        })
+        .strict(),
       annotations: { readOnlyHint: true },
     },
-    async ({ name }) =>
+    async ({ name }: { name?: string }) =>
       run(async () => {
         if (!name) return { content: [text(docsIndex())] };
         const doc = getDoc(name);
         if (!doc) {
           throw new ActionError('E_TARGET_NOT_FOUND', `no doc "${name}"`, {
-            hint: 'Call docs_get without a name to list them.',
+            hint: `Call docs_get without a name to list them. Available: ${docNames}.`,
           });
         }
         return { content: [text(doc.body.startsWith("#") ? doc.body : `# ${doc.title}\n\n${doc.body}`)] };
@@ -409,6 +591,9 @@ export function createServer(context: ServerContext): McpServer {
       inputSchema: {
         action: z.enum(['reload', 'back', 'forward']),
       },
+      // Navigation reaches the network, so it is open-world. It is not destructive: it
+      // moves the browser, it does not write anything. Same reading as browser_goto.
+      annotations: { openWorldHint: true },
     },
     async ({ action }) =>
       run(async () => {
@@ -515,10 +700,19 @@ export function createServer(context: ServerContext): McpServer {
         limit: z.number().int().min(1).max(100).optional(),
         afterSequence: z.number().int().min(0).optional(),
         includeStatic: z.boolean().optional(),
+        maxChars: z
+          .number()
+          .int()
+          .min(500)
+          .max(200000)
+          .optional()
+          .describe(
+            'Cap on the JSON returned (default 30000). Entries are dropped whole, never cut mid-body, and the reply says how many.',
+          ),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ pattern, limit, afterSequence, includeStatic }) =>
+    async ({ pattern, limit, afterSequence, includeStatic, maxChars }) =>
       run(async () => {
         try {
           const tab = await tabFor();
@@ -528,7 +722,28 @@ export function createServer(context: ServerContext): McpServer {
             ...(afterSequence !== undefined ? { afterSequence } : {}),
             ...(includeStatic !== undefined ? { includeStatic } : {}),
           });
-          return { content: [text({ ok: true, ...result })] };
+          const cap = maxChars ?? 30_000;
+          // Drop whole entries from the end rather than slicing the string: a body cut in
+          // the middle reads as a short body instead of a truncated one.
+          const kept = [...result.entries];
+          let truncatedEntries = 0;
+          while (kept.length > 0 && JSON.stringify(kept).length > cap) {
+            kept.pop();
+            truncatedEntries += 1;
+          }
+          return {
+            content: [
+              text({
+                ok: true,
+                cursor: result.cursor,
+                entries: kept,
+                hasMore: result.hasMore,
+                truncated: truncatedEntries > 0 || result.hasMore,
+                truncatedEntries,
+                chars: JSON.stringify(kept).length,
+              }),
+            ],
+          };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }
@@ -540,7 +755,7 @@ export function createServer(context: ServerContext): McpServer {
     {
       title: 'Browser JavaScript REPL',
       description:
-        'Persistent JavaScript workspace. Variables, functions and classes survive between calls, and top-level await works. Globals: tab (goto/observe/act/read/screenshot/find/expect/cookie/fetchJson), sites (list/search/run), sleep. The last expression is returned.',
+        'Persistent JavaScript workspace. Variables, functions and classes survive between calls, and top-level await works. Globals: tab (url/title/goto/observe/act/read/screenshot/find/expect/cookie/cookies/frames/reload/back/forward/download/contentState/networkRead/evaluateInFrame/fetchJson), sites (list/search/run), sleep, log. The last expression is returned. A failure comes back as { ok:false, error:{ code, message, hint?, data? } }, the same envelope as every other tool.',
       inputSchema: {
         code: z.string().describe('JavaScript to run'),
         timeoutMs: z.number().int().min(100).max(300000).optional(),
@@ -562,10 +777,37 @@ export function createServer(context: ServerContext): McpServer {
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             ...(maxChars !== undefined ? { maxChars } : {}),
           });
-          const payload = result.ok
-            ? { ok: true, ...(result.value !== undefined ? { value: result.value } : {}), ...(result.writes.length ? { output: result.writes } : {}), defined: result.defined ?? [] }
-            : { ok: false, error: result.error, ...(result.writes.length ? { output: result.writes } : {}) };
-          return { content: [text(payload)], ...(result.ok ? {} : { isError: true }) };
+          if (result.ok) {
+            return {
+              content: [
+                text({
+                  ok: true,
+                  ...(result.value !== undefined ? { value: result.value } : {}),
+                  ...(result.writes.length ? { output: result.writes } : {}),
+                  defined: result.defined ?? [],
+                }),
+              ],
+            };
+          }
+          // A snippet that fails is the caller's to fix, so it travels as a coded envelope
+          // instead of { ok:false, error:{message} }, which forced a caller to match prose.
+          // Note: the code union has E_BAD_ARGUMENT, not the E_ACTION_ARGUMENT the task
+          // named; errors.ts belongs to another slice, so the closer existing code is used.
+          const message = result.error?.message ?? 'script failed';
+          const timedOut = /execution timed out after|promise did not settle within/i.test(message);
+          const syntax = result.error?.name === 'SyntaxError';
+          const failure = new ActionError(
+            timedOut ? 'E_ACTION_TIMEOUT' : syntax ? 'E_BAD_ARGUMENT' : 'E_ACTION_FAILED',
+            message,
+            {
+              ...(timedOut
+                ? { hint: 'Raise timeoutMs, or await the promise inside the snippet instead of returning it.' }
+                : {}),
+              ...(syntax ? { hint: 'Fix the syntax: nothing was executed.' } : {}),
+              ...(result.writes.length ? { data: { output: result.writes } } : {}),
+            },
+          );
+          return { content: [text(toEnvelope(failure))], isError: true };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }
@@ -733,7 +975,25 @@ export function createServer(context: ServerContext): McpServer {
             ...(includeStructure !== undefined ? { includeStructure } : {}),
           });
           const header = `url: ${result.url}\ntitle: ${result.title}\nrevision: ${result.revision}\nnodes: ${result.nodes.length}/${result.total}${result.truncated ? ' (truncated)' : ''}`;
-          return { content: [text(`${header}\n\n${result.text}`)] };
+          // Prose first: the snapshot is meant to be read. The same facts as JSON ride
+          // second so the wrapper's parse succeeds and session recovery applies to this
+          // tool at all.
+          return {
+            content: [
+              text(`${header}\n\n${result.text}`),
+              text({
+                ok: true,
+                url: result.url,
+                title: result.title,
+                revision: result.revision,
+                nodes: { shown: result.nodes.length, total: result.total, truncated: result.truncated },
+                // No body here on purpose: the snapshot text is already in part 0, and a
+                // second copy would double the payload for every observe call.
+                truncated: result.truncated,
+                chars: result.text.length,
+              }),
+            ],
+          };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }
@@ -795,7 +1055,22 @@ export function createServer(context: ServerContext): McpServer {
             ...(format ? { format } : {}),
             ...(maxChars ? { maxChars } : {}),
           });
-          return { content: [text(`url: ${result.url}\ntitle: ${result.title}\n\n${result.text}`)] };
+          // Prose first for readability; JSON second so truncation is a field a caller can
+          // branch on rather than a sentence it has to match.
+          return {
+            content: [
+              text(`url: ${result.url}\ntitle: ${result.title}\n\n${result.text}`),
+              text({
+                ok: true,
+                url: result.url,
+                title: result.title,
+                target: result.target,
+                // Body stays in part 0 only; this part is metadata.
+                truncated: result.truncated,
+                chars: result.text.length,
+              }),
+            ],
+          };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }

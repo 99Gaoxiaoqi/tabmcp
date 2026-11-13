@@ -3,8 +3,8 @@
 
 An MCP server that drives a real browser tab: observe, act, read, and record what the page fetches.
 
-<!-- tool-count: 18 -->
-18 built-in tools over MCP stdio, plus one tool per installed adapter. Grouped by
+<!-- tool-count: 20 -->
+20 built-in tools over MCP stdio (including the list-only browser_tabs and browser_tabs_select), plus one tool per installed adapter. Grouped by
 what you want to do, not by name:
 
 | You want to | Tools |
@@ -136,9 +136,11 @@ npm test    # settle contract (fake activity source) + MCP round-trip when a bro
 Both transports work against a real Chrome: CDP (`--connect`) and the extension
 (`--extension`). Verified on real sites, not only on a local test page.
 
-- 18 MCP tools, identical result fields on both channels (asserted in tests)
+- 20 built-in MCP tools; both channels share one result-field contract. Parity is asserted
+  against fake transports in tests - the two real page implementations are verified on a
+  live browser, not in unit tests
 - persistent JS REPL, named tab groups, session recovery, per-agent tab isolation
-- site adapters with a draft gate, plus recon that records XHR/fetch traffic
+- site adapters loaded from a directory, plus recon that records XHR/fetch traffic
 - every failure carries a branchable code; transport errors are classified once
 
 Known platform limits are listed in `docs_get` under `channels`.
@@ -291,10 +293,10 @@ export default {
 Tools: `sites_search` lists adapters (site, command, access, args), `site_run` executes one.
 Adding a site means dropping a file in the adapters directory — no rebuild.
 
-**Drafts do not appear as tools.** A candidate adapter is stored as a draft with an
-`expect` (e.g. `{ minRows: 3, result_path: 'items' }`); `DraftStore.activate()` refuses
-until `markVerified()` has run on a passing result. Automation can therefore propose
-adapters without polluting the tool list with guesses.
+**Drafts do not appear as tools.** `recon_draft` returns adapter source as text; you finish
+it, save the file into the adapters directory, and reload. Nothing is stored, and there is
+no activation step. The sources contain a `DraftStore` class with a verify-then-activate
+flow, but no product code constructs it, so in practice the gate is you reading the draft.
 
 ### Runtime additions this required
 
