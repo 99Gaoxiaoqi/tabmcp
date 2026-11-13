@@ -6,6 +6,8 @@
  * extension can forward frames without knowing about JSON boundaries.
  */
 
+import { ActionError } from './core/errors.js';
+
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 export interface StartFrame {
@@ -61,10 +63,13 @@ export interface TabInfo {
 }
 
 /** Encodes one native-messaging frame. */
-export function encodeFrame(message: unknown): Buffer {
+export function encodeFrame(message: unknown, maxBytes: number = MAX_FRAME_BYTES): Buffer {
   const payload = Buffer.from(JSON.stringify(message), 'utf8');
-  if (payload.byteLength > MAX_FRAME_BYTES) {
-    throw new Error(`frame too large: ${payload.byteLength} bytes`);
+  if (payload.byteLength > maxBytes) {
+    throw new ActionError('E_FRAME_TOO_LARGE', `frame too large: ${payload.byteLength} bytes`, {
+      hint: 'The payload exceeds the native-messaging limit. Send less per message, or split it.',
+      data: { direction: 'encode', bytes: payload.byteLength, max: maxBytes },
+    });
   }
   const header = Buffer.allocUnsafe(4);
   header.writeUInt32LE(payload.byteLength, 0);
@@ -84,7 +89,12 @@ export class FrameDecoder {
     for (;;) {
       if (this.buffer.length < 4) break;
       const length = this.buffer.readUInt32LE(0);
-      if (length > MAX_FRAME_BYTES) throw new Error(`frame too large: ${length} bytes`);
+      if (length > MAX_FRAME_BYTES) {
+        throw new ActionError('E_FRAME_TOO_LARGE', `frame too large: ${length} bytes`, {
+          hint: 'The peer announced a frame beyond the limit. The stream is out of sync; reconnect it.',
+          data: { direction: 'decode', bytes: length, max: MAX_FRAME_BYTES },
+        });
+      }
       if (this.buffer.length < 4 + length) break;
       const payload = this.buffer.subarray(4, 4 + length).toString('utf8');
       this.buffer = this.buffer.subarray(4 + length);

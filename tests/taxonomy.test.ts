@@ -9,8 +9,15 @@ import test from 'node:test';
  * The alternative — throwing a bare Error and matching its wording in a classifier —
  * means a reworded message silently changes the code, with no test going red. This
  * scan keeps that from creeping back in.
+ *
+ * ROOTS is the whole source tree, not a list of subdirectories. A handwritten list is
+ * a list of directories someone remembered: the two files at the root (main.ts,
+ * protocol.ts) and the largest file in the repo (mcp/server.ts) were all outside it,
+ * so the bare throws in them were never scanned. Adding a directory does not remind
+ * anyone to come back here; starting at src/ does not need to.
  */
-const ROOTS = ['src/transport', 'src/api', 'src/core', 'src/host', 'src/repl', 'src/adapters', 'src/sdk'];
+const ROOTS = ['src'];
+const ERRORS_FILE = path.join('src', 'core', 'errors.ts');
 
 const walk = (dir: string): string[] =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -19,31 +26,55 @@ const walk = (dir: string): string[] =>
     return entry.name.endsWith('.ts') ? [full] : [];
   });
 
+/** Every .ts file under ROOTS, read once. Fails loudly if the walk found nothing. */
+const sources = (): { file: string; text: string }[] => {
+  const files = ROOTS.flatMap(walk);
+  assert.ok(files.length > 20, `source walk found only ${files.length} files under ${ROOTS.join(', ')}`);
+  return files.map((file) => ({ file, text: fs.readFileSync(file, 'utf8') }));
+};
+
 test('taxonomy: product code never throws a bare Error', () => {
   const offenders: string[] = [];
-  for (const root of ROOTS) {
-    for (const file of walk(root)) {
-      const lines = fs.readFileSync(file, 'utf8').split('\n');
-      lines.forEach((line, index) => {
-        if (/throw new Error\(/.test(line)) offenders.push(`${file}:${index + 1}: ${line.trim()}`);
-      });
-    }
+  for (const { file, text } of sources()) {
+    text.split('\n').forEach((line, index) => {
+      if (/throw new Error\(/.test(line)) offenders.push(`${file}:${index + 1}: ${line.trim()}`);
+    });
   }
   assert.deepEqual(offenders, [], `bare throws found:\n${offenders.join('\n')}`);
 });
 
-test('taxonomy: every ActionError code is declared in the union', () => {
-  const source = fs.readFileSync('src/core/errors.ts', 'utf8');
-  const union = source.slice(source.indexOf('export type ErrorCode'), source.indexOf('];', source.indexOf('export const ERROR_CODES')));
-  const declared = new Set([...union.matchAll(/'([A-Z][A-Z_]+)'/g)].map((match) => match[1]!));
-  const used = new Set<string>();
-  for (const root of ROOTS) {
-    for (const file of walk(root)) {
-      const text = fs.readFileSync(file, 'utf8');
-      for (const match of text.matchAll(/new ActionError\('([A-Z_]+)'/g)) used.add(match[1]!);
-    }
-  }
-  const unknown = [...used].filter((code) => !declared.has(code));
-  assert.deepEqual(unknown, [], 'codes used but not declared');
-  assert.ok(used.size > 4, `expected several distinct codes, saw ${used.size}`);
+test('taxonomy: declared codes and used codes match in both directions', () => {
+  const errorsSource = fs.readFileSync(ERRORS_FILE, 'utf8');
+  const block = /export type ErrorCode\s*=([\s\S]*?);/.exec(errorsSource);
+  assert.ok(block, 'could not locate the `export type ErrorCode` union');
+
+  const body = block[1]!;
+  const declared = [...body.matchAll(/'([A-Z][A-Z0-9_]+)'/g)].map((match) => match[1]!);
+  // Closure: the parse must see as many entries as the block actually contains. A
+  // regex that quietly stopped matching part of the union would otherwise shrink the
+  // declared set and make the checks below pass on less.
+  const rawEntries = body.match(/'[A-Z][A-Z0-9_]+'/g) ?? [];
+  assert.equal(declared.length, rawEntries.length, 'union parse dropped entries');
+  assert.ok(declared.length >= 5, `expected several declared codes, saw ${declared.length}`);
+
+  // Everything except the union declaration itself: a code counts as used when it
+  // appears somewhere that is not its own declaration.
+  const allText = sources()
+    .map((entry) => entry.text)
+    .join('\n')
+    .replace(block[0], '');
+
+  const unused = declared.filter((code) => !allText.includes(`'${code}'`));
+  assert.deepEqual(
+    unused,
+    [],
+    `declared but never used — a code nobody raises invites the nearest wrong meaning: ${unused.join(', ')}`,
+  );
+
+  const usedInActionError = new Set(
+    [...allText.matchAll(/new ActionError\('([A-Z_][A-Z0-9_]*)'/g)].map((match) => match[1]!),
+  );
+  const declaredSet = new Set(declared);
+  const undeclared = [...usedInActionError].filter((code) => !declaredSet.has(code));
+  assert.deepEqual(undeclared, [], `codes used but not declared: ${undeclared.join(', ')}`);
 });

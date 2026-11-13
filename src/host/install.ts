@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { ActionError } from '../core/errors.js';
 
 /**
  * The native host name is the one string that must agree in three places: the
@@ -60,6 +61,21 @@ function hostManifestPath(): string {
 
 export function install(options: InstallOptions): InstallResult {
   const node = options.nodePath ?? process.execPath;
+  // The manifest records this path verbatim and Chrome only discovers the problem
+  // when the user clicks the extension, long after install reported success. Checking
+  // here is what makes the failure land where someone is looking.
+  if (!fs.existsSync(node) || !fs.statSync(node).isFile()) {
+    throw new ActionError(
+      options.nodePath ? 'E_BAD_ARGUMENT' : 'E_PRECONDITION_FAILED',
+      `native host executable does not exist: ${node}`,
+      {
+        hint: options.nodePath
+          ? 'Pass an existing node executable, or omit nodePath to use the one running this process.'
+          : 'The node running the installer is not a file on disk. Reinstall node, or pass nodePath explicitly.',
+        data: { nodePath: node, exists: fs.existsSync(node) },
+      },
+    );
+  }
   const manifest = {
     name: HOST_NAME,
     description: 'TabMCP host',

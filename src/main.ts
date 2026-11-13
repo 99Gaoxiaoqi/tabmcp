@@ -13,7 +13,7 @@ import { DeferredSession } from './transport/deferred.js';
 import { loadAdapters } from './adapters/loader.js';
 import { serveStdio } from './mcp/server.js';
 import { Tab } from './api/tab.js';
-import { toEnvelope } from './core/errors.js';
+import { toEnvelope, ActionError } from './core/errors.js';
 import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
@@ -90,7 +90,15 @@ async function probe(session: BrowserSession): Promise<void> {
   });
 
   const clickTarget = observed.nodes.find((n) => n.role === 'button' && /click/i.test(n.name));
-  if (!clickTarget?.ref) throw new Error('probe: clickable button not found');
+  // The probe is product code that runs against a real page, so it raises the
+  // product's error type. A bare Error here would be the one throw in src/ that no
+  // caller can branch on, and taxonomy.test.ts now scans all of src/.
+  if (!clickTarget?.ref) {
+    throw new ActionError('E_TARGET_NOT_FOUND', 'probe: clickable button not found', {
+      hint: 'The probe page should render a button whose accessible name contains "click".',
+      data: { url: observed.url, nodes: observed.total },
+    });
+  }
   const acted = await tab.act({ ref: clickTarget.ref, action: 'click', revision: observed.revision });
   log('act.click', acted);
 

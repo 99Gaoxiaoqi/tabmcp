@@ -24,6 +24,10 @@ export type ErrorCode =
   | 'E_ACTION_TIMEOUT'
   | 'E_ACTION_FAILED'
   | 'E_BROWSER_DISCONNECTED'
+  // A native-messaging frame exceeded MAX_FRAME_BYTES. Separate from E_INTERNAL
+  // because the caller can act on it: shrink the payload, or stop sending. Without
+  // its own code this reached the agent as "internal bug" and read as unactionable.
+  | 'E_FRAME_TOO_LARGE'
   | 'E_BAD_ARGUMENT'
   | 'E_INTERNAL';
 
