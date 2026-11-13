@@ -292,3 +292,147 @@ test('recon_draft candidate lookup tolerates case and accepts a path fragment', 
   assert.equal(matchCandidate(candidates, '/api/items')?.id, 'GET /api/items', 'path fragment');
   assert.equal(matchCandidate(candidates, 'nope'), undefined, 'a real miss is still a miss');
 });
+
+// ---------------------------------------------------------------------------
+// task #29: the two adapter entry points must behave the same, and arguments
+// must arrive with their declared types
+// ---------------------------------------------------------------------------
+
+function adapterCatalog(seen: Array<Record<string, unknown>>): unknown {
+  const definition = {
+    description: 'find things',
+    access: 'read' as const,
+    domain: 'example.test',
+    args: [
+      { name: 'limit', type: 'int' as const, required: true, help: 'how many to return' },
+      { name: 'exact', type: 'boolean' as const, help: 'match the phrase' },
+      { name: 'mode', type: 'string' as const, choices: ['fast', 'full'] },
+    ],
+    run: async (context: { args: Record<string, unknown> }) => {
+      seen.push(context.args);
+      return { ok: true };
+    },
+  };
+  return {
+    adapters: [
+      {
+        site: 'example',
+        command: 'find',
+        toolName: 'example find',
+        definition,
+        file: 'fake-adapter.ts',
+        source: 'builtin' as const,
+      },
+    ],
+    problems: [],
+  };
+}
+
+async function clientWithCatalog(page: RuntimePage, catalog: unknown): Promise<Client> {
+  const session = {
+    kind: 'cdp' as const,
+    pages: async () => [page],
+    activePage: async () => page,
+    newPage: async () => page,
+    close: async () => undefined,
+  } as unknown as BrowserSession;
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const server = createServer({ session, queue: (fn) => fn(), catalog: catalog as never });
+  await server.connect(serverSide);
+  const client = new Client({ name: 'fix-c-walter', version: '1.0.0' });
+  await client.connect(clientSide);
+  return client;
+}
+
+test('a per-adapter tool on the wrong site fails with E_WRONG_SITE, same as site_run', async () => {
+  const page = new FakePage();
+  await page.goto('https://elsewhere.test/page');
+  const seen: Array<Record<string, unknown>> = [];
+  const client = await clientWithCatalog(page, adapterCatalog(seen));
+  try {
+    const body = jsonPart(await client.callTool({ name: 'example_find', arguments: { limit: 5 } }));
+    assert.equal(body.ok, false);
+    // Before: the adapter ran and the page rejected the fetch, so the caller saw
+    // E_ACTION_FAILED "Failed to fetch" and had no way to tell it was the wrong site.
+    assert.equal(body.error.code, 'E_WRONG_SITE', 'the caller must be able to branch on "wrong site"');
+    assert.deepEqual(body.error.data, { expected: 'example.test', current: 'elsewhere.test' });
+    assert.equal(seen.length, 0, 'the adapter did not run against the wrong site');
+  } finally {
+    await client.close();
+  }
+});
+
+test('navigate:true makes a per-adapter tool open the adapter domain first', async () => {
+  const page = new FakePage();
+  await page.goto('https://elsewhere.test/page');
+  const seen: Array<Record<string, unknown>> = [];
+  const client = await clientWithCatalog(page, adapterCatalog(seen));
+  try {
+    const body = jsonPart(
+      await client.callTool({ name: 'example_find', arguments: { limit: 5, navigate: true } }),
+    );
+    assert.equal(body.ok, true);
+    assert.equal(await page.url(), 'https://example.test/', 'the domain was opened before the run');
+    assert.equal(seen.length, 1, 'the adapter ran after navigating');
+    assert.equal('navigate' in seen[0]!, false, 'navigate is ours, not the adapter argument');
+  } finally {
+    await client.close();
+  }
+});
+
+test('an int argument accepts 20 and "20" and the adapter still gets a number', async () => {
+  const page = new FakePage();
+  await page.goto('https://example.test/here');
+  const seen: Array<Record<string, unknown>> = [];
+  const client = await clientWithCatalog(page, adapterCatalog(seen));
+  try {
+    for (const limit of [20, '20']) {
+      const body = jsonPart(await client.callTool({ name: 'example_find', arguments: { limit } }));
+      assert.equal(body.ok, true, `limit=${JSON.stringify(limit)} is accepted`);
+    }
+    assert.deepEqual(seen.map((args) => args.limit), [20, 20]);
+    assert.equal(typeof seen[0]!.limit, 'number', 'the old string-only schema is gone, but strings still work');
+  } finally {
+    await client.close();
+  }
+});
+
+test('a boolean argument does not turn "false" into true', async () => {
+  const page = new FakePage();
+  await page.goto('https://example.test/here');
+  const seen: Array<Record<string, unknown>> = [];
+  const client = await clientWithCatalog(page, adapterCatalog(seen));
+  try {
+    const body = jsonPart(
+      await client.callTool({ name: 'example_find', arguments: { limit: 1, exact: 'false' } }),
+    );
+    assert.equal(body.ok, true);
+    // z.coerce.boolean() is Boolean(x), so the string "false" would arrive as true -
+    // the caller asks for the opposite of what they get, and nothing reports it.
+    assert.equal(seen[0]!.exact, false, '"false" must stay false');
+  } finally {
+    await client.close();
+  }
+});
+
+test('a value outside the declared choices is rejected before the adapter runs', async () => {
+  const page = new FakePage();
+  await page.goto('https://example.test/here');
+  const seen: Array<Record<string, unknown>> = [];
+  const client = await clientWithCatalog(page, adapterCatalog(seen));
+  try {
+    // The transport may answer a schema violation either by throwing or by an error
+    // result; what must hold is that the caller is told, and the adapter never runs.
+    let told = false;
+    try {
+      const result = await client.callTool({ name: 'example_find', arguments: { limit: 1, mode: 'turbo' } });
+      told = (result as Envelope).isError === true || jsonPart(result).ok === false;
+    } catch {
+      told = true;
+    }
+    assert.equal(told, true, 'the schema refuses a value the adapter declared impossible');
+    assert.equal(seen.length, 0, 'the adapter was never called');
+  } finally {
+    await client.close();
+  }
+});

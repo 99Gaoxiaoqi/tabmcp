@@ -16,6 +16,7 @@ import type { RuntimePage } from '../transport/page.js';
 import { Tab } from '../api/tab.js';
 import { findAdapter, loadAdapters, searchAdapters, type AdapterCatalog } from '../adapters/loader.js';
 import { checkExpectation, runAdapter } from '../adapters/runner.js';
+import type { ArgSpec } from '../sdk/index.js';
 import { JsSession } from '../repl/session.js';
 import { createReplGlobals } from '../repl/facade.js';
 import { ReconRecorder, draftFromCandidate, type ApiCandidate } from '../recon/capture.js';
@@ -302,6 +303,95 @@ export function createServer(context: ServerContext): McpServer {
   };
 
   const run = <T>(fn: () => Promise<T>) => context.queue(fn);
+
+  /**
+   * Both adapter entry points (`site_run` and the per-adapter `<site>_<command>` tools)
+   * have to answer "the tab is on the wrong site" identically: same code, same data
+   * shape, same offer to navigate. It lives in one function for exactly that reason -
+   * two copies drift, and the caller cannot tell which entry it used from the error.
+   */
+  /**
+   * One argument's schema, from the adapter's own spec. Numbers and booleans arrive as
+   * strings from most clients, so they are coerced - but only where coercion cannot
+   * change the meaning:
+   *
+   *  - `int`/`number` -> `z.coerce.number()`; `"20"` and `20` are the same number.
+   *  - `boolean` deliberately NOT `z.coerce.boolean()`: that is `Boolean(x)`, so the
+   *    string `"false"` becomes **true**. A caller writing `flag=false` would get the
+   *    opposite of what they asked for, with no error anywhere. Only the spellings that
+   *    are unambiguous are accepted, and anything else is rejected rather than guessed.
+   *  - `array`/`object` keep their shape; a comma-separated string is not an array, and
+   *    pretending it is would hide a caller's mistake.
+   */
+  const schemaForArg = (arg: ArgSpec): z.ZodTypeAny => {
+    let base: z.ZodTypeAny;
+    switch (arg.type) {
+      case 'int':
+      case 'number':
+        base = z.coerce.number();
+        break;
+      case 'boolean':
+        base = z
+          .union([z.boolean(), z.string()])
+          .transform((value) => {
+            if (typeof value === 'boolean') return value;
+            const text = value.trim().toLowerCase();
+            if (text === 'true' || text === '1') return true;
+            if (text === 'false' || text === '0') return false;
+            return null;
+          })
+          .refine((value): value is boolean => value !== null, {
+            message: 'expected a boolean: true, false, 1 or 0',
+          });
+        break;
+      case 'array':
+        base = z.array(arg.items?.type === 'number' || arg.items?.type === 'int' ? z.coerce.number() : z.string());
+        break;
+      case 'object':
+        base = z.record(z.string(), z.unknown());
+        break;
+      default:
+        base = z.string();
+    }
+    if (arg.choices?.length) {
+      // `choices` is the adapter saying "these values and no others". Refine rather than
+      // `z.union([base, z.enum(...)])`: base already accepts any string, so the union would
+      // swallow the enum whole and enforce nothing - a check that always passes.
+      const allowed = new Set(arg.choices.map((choice) => String(choice)));
+      const listed = [...allowed].join(', ');
+      base = base.refine((value) => allowed.has(String(value)), {
+        message: `expected one of: ${listed}`,
+      });
+    }
+    const notes: string[] = [];
+    if (arg.help) notes.push(arg.help);
+    if (arg.example !== undefined) notes.push(`e.g. ${JSON.stringify(arg.example)}`);
+    if (arg.default !== undefined) notes.push(`default: ${JSON.stringify(arg.default)}`);
+    if (notes.length) base = base.describe(notes.join(' '));
+    return arg.required ? base : base.optional();
+  };
+
+  const ensureAdapterDomain = async (
+    label: string,
+    domain: string | undefined,
+    tab: Tab,
+    navigate: boolean,
+  ): Promise<void> => {
+    if (!domain) return;
+    const currentUrl = await tab.page.url().catch(() => '');
+    if (hostMatches(currentUrl, domain)) return;
+    if (!navigate) {
+      throw new ActionError(
+        'E_WRONG_SITE',
+        `Adapter "${label}" targets ${domain}, but the current tab is on ${hostOf(currentUrl) || 'an unknown page'}`,
+        {
+          hint: 'Navigate there first, or call again with navigate:true.',
+          data: { expected: domain, current: hostOf(currentUrl) },
+        },
+      );
+    }
+    await tab.goto(`https://${domain}/`, { timeoutMs: 45_000 });
+  };
 
   // Adapters are discovered once per server start; a reload is a reconnect away.
   let catalogPromise: Promise<AdapterCatalog> | null = null;
@@ -906,23 +996,7 @@ export function createServer(context: ServerContext): McpServer {
             });
           }
           const tab = await tabFor();
-          const domain = adapter.definition.domain;
-          if (domain) {
-            const current = await tab.page.url().catch(() => '');
-            if (!hostMatches(current, domain)) {
-              if (!navigate) {
-                throw new ActionError(
-                  'E_WRONG_SITE',
-                  `Adapter "${site} ${command}" targets ${domain}, but the current tab is on ${hostOf(current) || 'an unknown page'}`,
-                  {
-                    hint: 'Navigate there first, or call again with navigate:true.',
-                    data: { expected: domain, current: hostOf(current) },
-                  },
-                );
-              }
-              await tab.goto(`https://${domain}/`, { timeoutMs: 45_000 });
-            }
-          }
+          await ensureAdapterDomain(`${site} ${command}`, adapter.definition.domain, tab, navigate === true);
           const result = await runAdapter({ adapter, tab: tab.page, args: args ?? {} });
           return { content: [text(result)] };
         } catch (err) {
@@ -1124,10 +1198,17 @@ export function createServer(context: ServerContext): McpServer {
   if (context.catalog) {
     for (const adapter of context.catalog.adapters) {
       const toolName = `${adapter.site}_${adapter.command}`.replace(/[^A-Za-z0-9_-]/g, '_');
+      const specArgs = adapter.definition.args ?? [];
+      // An adapter may declare its own `navigate` argument; if it does, that argument is
+      // the adapter's, and this tool must not quietly take it over.
+      const ownsNavigate = !specArgs.some((arg) => arg.name === 'navigate');
       const schema: Record<string, z.ZodTypeAny> = {};
-      for (const arg of adapter.definition.args ?? []) {
-        const base = z.string();
-        schema[arg.name] = arg.required ? base : base.optional();
+      for (const arg of specArgs) schema[arg.name] = schemaForArg(arg);
+      if (ownsNavigate) {
+        schema.navigate = z
+          .boolean()
+          .optional()
+          .describe('Navigate to the adapter domain first (default: require the current tab to be there)');
       }
       server.registerTool(
         toolName,
@@ -1137,11 +1218,19 @@ export function createServer(context: ServerContext): McpServer {
           inputSchema: schema,
           annotations: { openWorldHint: true, destructiveHint: adapter.definition.access === 'write' },
         },
-        async (args) =>
+        async (raw) =>
           run(async () => {
             try {
               const tab = await tabFor();
-              const result = await runAdapter({ adapter, tab: tab.page, args: args as Record<string, unknown> });
+              const { navigate, ...adapterArgs } = raw as Record<string, unknown>;
+              const wantsNavigate = ownsNavigate && navigate === true;
+              await ensureAdapterDomain(
+                `${adapter.site} ${adapter.command}`,
+                adapter.definition.domain,
+                tab,
+                wantsNavigate,
+              );
+              const result = await runAdapter({ adapter, tab: tab.page, args: adapterArgs });
               return { content: [text(result)] };
             } catch (err) {
               return { content: [text(toEnvelope(err))], isError: true };
