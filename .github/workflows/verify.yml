@@ -1,0 +1,29 @@
+# Green here proves the static gates and the unit tests.
+# It does not prove the tool works against a real browser: that test is skipped when
+# nothing is listening on 127.0.0.1:9222, so a green run here is not a real-machine run.
+name: verify
+
+on:
+  # Every branch, not only main: the way to prove this gate can fail is to push a
+  # deliberately broken branch and watch it go red.
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      # The skip is in the step name on purpose: a reader must not have to open the log
+      # to learn that the browser-backed test did not run here.
+      - name: verify (browser-backed test skips without Chrome)
+        run: npm run verify
