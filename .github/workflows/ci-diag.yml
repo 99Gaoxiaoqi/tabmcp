@@ -11,27 +11,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - name: pin npm
-        run: npm install -g npm@10.9.8
-      - name: what is the environment
+      - id: env
+        name: environment
+        continue-on-error: true
         run: |
           npm --version
+          node --version
           npm config get cache
-          npm config get registry
           node -e "console.log('npm_config_cache=' + process.env.npm_config_cache)"
           node -e "console.log('NODE_OPTIONS=' + process.env.NODE_OPTIONS)"
-      - name: A: npm ci with a workspace cache
+      - id: a
+        name: A npm ci
         continue-on-error: true
-        run: npm ci --cache .npm-cache --no-audit --no-fund
-      - name: B: npm install
+        run: npm ci --no-audit --no-fund --loglevel verbose
+      - id: b
+        name: B npm install
         continue-on-error: true
-        run: npm install --no-audit --no-fund
-      - name: C: npm ci without cache dir
+        run: npm install --no-audit --no-fund --loglevel verbose
+      - id: c
+        name: C npm-cli.js directly
         continue-on-error: true
-        run: |
-          Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-          npm ci --no-audit --no-fund
+        run: node "$(npm root -g)\\npm\\bin\\npm-cli.js" ci --no-audit --no-fund
       - name: outcomes
-        run: |
-          Write-Host "A=${{ steps.a.outcome }} B=${{ steps.b.outcome }} C=${{ steps.c.outcome }}"
+        run: Write-Host "A=${{ steps.a.outcome }} B=${{ steps.b.outcome }} C=${{ steps.c.outcome }}"
