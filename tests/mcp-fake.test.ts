@@ -16,7 +16,7 @@ import type { BrowserSession } from '../src/transport/cdp.js';
 import type { EvaluateOptions, NavigationResult, RuntimePage, ScreenshotOptions } from '../src/transport/page.js';
 import type { NetworkInfo } from '../src/core/activity.js';
 
-class FakePage implements RuntimePage {
+export class FakePage implements RuntimePage {
   readonly id = 'fake-1';
   private currentUrl = 'about:blank';
   private visible = true;
@@ -142,7 +142,7 @@ class FakePage implements RuntimePage {
   }
 }
 
-class FakeSession implements BrowserSession {
+export class FakeSession implements BrowserSession {
   readonly kind = 'extension' as const;
   private readonly page = new FakePage();
   async pages(): Promise<RuntimePage[]> {
@@ -157,7 +157,7 @@ class FakeSession implements BrowserSession {
   async close(): Promise<void> {}
 }
 
-async function connectFake(): Promise<Client> {
+export async function connectFake(): Promise<Client> {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const server = createServer({
     session: new FakeSession(),
@@ -169,7 +169,7 @@ async function connectFake(): Promise<Client> {
   return client;
 }
 
-function textOf(result: unknown): string {
+export function textOf(result: unknown): string {
   const content = ((result as { content?: unknown }).content ?? []) as Array<{ type: string; text?: string }>;
   return content.find((part) => part.type === 'text')?.text ?? '';
 }

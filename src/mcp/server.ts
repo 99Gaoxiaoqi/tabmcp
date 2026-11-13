@@ -21,6 +21,20 @@ import { createReplGlobals } from '../repl/facade.js';
 import { ReconRecorder, draftFromCandidate } from '../recon/capture.js';
 import { DOCS, docsIndex, getDoc, listDocs } from '../docs/index.js';
 
+/**
+ * Tools whose repeat is harmless. A click and a js snippet are deliberately absent:
+ * re-running them could act twice, and "may have clicked twice" is exactly the kind of
+ * invisible wrong this project keeps removing. Anything not listed fails once and says
+ * what replaced the page.
+ */
+export const RETRY_SAFE_TOOLS = [
+  'browser_goto',
+  'browser_observe',
+  'browser_read',
+  'browser_screenshot',
+  'doctor',
+] as const;
+
 export interface ServerContext {
   session: BrowserSession;
   /** Serialises operations; one browser, one orderly queue. */
@@ -86,6 +100,29 @@ export function createServer(context: ServerContext): McpServer {
     return session.recover(cause);
   };
 
+  const RETRY_SAFE = new Set<string>(RETRY_SAFE_TOOLS);
+
+  /** Turn on the page that took over, so the error can name it (read-only). */
+  const resolveCurrentPage = async (): Promise<void> => {
+    await context.session.activePage().catch(() => undefined);
+  };
+
+  /** Attach the replacement facts to an error envelope and say what to do next. */
+  const annotateReplacedError = (envelope: unknown, info: SessionNotice | null, cause: string): unknown => {
+    if (!envelope || typeof envelope !== 'object') return envelope;
+    const body = envelope as Record<string, unknown>;
+    const error = { ...((body.error ?? {}) as Record<string, unknown>) };
+    const data = { ...((error.data ?? {}) as Record<string, unknown>) };
+    data.sessionReplaced = true;
+    data.previousTabId = info?.replaced?.previousTabId ?? null;
+    data.currentTabId = info?.replaced?.currentTabId ?? null;
+    data.replaceCause = cause;
+    error.data = data;
+    error.hint =
+      'The page was replaced during this call. Re-observe and decide whether to retry: the action may already have happened.';
+    return { ...body, error };
+  };
+
   const deadCause = (body: unknown): string | null => {
     if (!body || typeof body !== 'object') return null;
     const error = (body as { error?: { message?: unknown } }).error;
@@ -139,8 +176,32 @@ export function createServer(context: ServerContext): McpServer {
           cause = null;
         }
         if (cause && (await recoverSession(cause))) {
-          result = await handler(...args);
-          notice = takeSessionNotice();
+          if (RETRY_SAFE.has(name)) {
+            result = await handler(...args);
+            notice = takeSessionNotice();
+          } else {
+            // The call may already have happened. Report it; never run it again.
+            // Resolve first: the notice only knows which page took over once one is asked for.
+            await resolveCurrentPage();
+            const info = takeSessionNotice();
+            const first = result.content[0];
+            let body: unknown;
+            try {
+              body = JSON.parse(first.text);
+            } catch {
+              body = null;
+            }
+            if (body) {
+              result = {
+                ...result,
+                content: [
+                  { ...first, text: JSON.stringify(annotateReplacedError(body, info, cause), null, 2) },
+                  ...result.content.slice(1),
+                ],
+              };
+            }
+            notice = null;
+          }
         }
       }
       if (!notice) return result;
