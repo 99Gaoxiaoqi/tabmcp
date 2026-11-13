@@ -174,8 +174,9 @@ stdin/stdout into Node.
 ### Run the extension path
 
 ```bash
+npm run build                             # dist/ - ignored by git, so a fresh clone has none
+npm run build:launcher                    # native-host.exe - also ignored, so a fresh clone has none
 node scripts/setup-extension.mjs          # host manifest + HKCU registry, prints extension id
-npm run build
 
 # 1. launch Chrome with a scratch profile
 chrome --remote-debugging-port=9445 --user-data-dir=<tmp> --enable-unsafe-extension-debugging
@@ -187,6 +188,96 @@ node load-ext.mjs                          # or Extensions.loadUnpacked via CDP
 node dist/src/main.js --extension --probe
 node dist/src/main.js --extension          # MCP over stdio
 ```
+
+### Installing dependencies, and the two things `npm install` can be telling you
+
+`package.json` has `"prepare": "npm run build"`, so `npm install` also compiles TypeScript.
+That is deliberate - `bin.tabmcp` points at `dist/src/main.js`, and `dist/` is git-ignored,
+so without it a fresh clone has a broken `npx tabmcp`. The cost is that **one exit code now
+covers two different situations**:
+
+- **Dependencies only:** `npm install --ignore-scripts` (or `npm ci --ignore-scripts`)
+  installs packages without running `prepare`, so a source tree that does not currently
+  compile still gets its dependencies. Note that `--ignore-scripts` also skips install
+  scripts belonging to the *dependencies themselves*.
+
+  Whether that is safe is checkable rather than a promise: count the packages that
+  declare one. At the time of writing the lockfile lists **99 packages and the answer is
+  0**, so nothing is skipped that would have built anything (`playwright-core` fetches its
+  browsers separately, not from an install hook).
+
+  Two denominators to keep straight, because both get quoted: the `packages` object has
+  **100 keys**, one of which is the workspace root (`""`) - that entry is the project, not
+  a dependency. 99 + root = 100. The command below counts the whole object (root included,
+  which declares no install script), so read its answer as "how many declare one", not as
+  "how many packages exist". Re-run it after adding a dependency:
+
+  ```bash
+  node -e "const l=require('./package-lock.json');console.log(Object.values(l.packages).filter(p=>p&&p.hasInstallScript).length)"
+  ```
+
+  A non-zero answer means `--ignore-scripts` would genuinely skip a build; do not use it
+  there. Prefer this check over trusting the sentence above, which goes stale the day a
+  native dependency is added.
+- **`npm install` fails at the end, in the build step:** the packages are already
+  installed. Fix the type error. Do not reinstall, and do not "repair" `package.json` -
+  it was never the problem.
+
+Read the failing step's name before reacting: the failure is almost never the step the
+message is attached to.
+
+### Building `native-host.exe`
+
+```bash
+npm run build:launcher
+```
+
+A native messaging host is started from `path` with no arguments, so a `.cmd` wrapper
+cannot work; it has to be a real executable, and `launcher/Launcher.cs` is it.
+
+`native-host.exe` is in `.gitignore`, so **a clean clone does not contain it and
+`npm run verify` still passes** - `verify` builds `dist/` and runs tests, and never looks
+for the host binary. A green `verify` says the TypeScript is sound; it says nothing about
+whether a browser could actually start the host.
+
+Measured on the development machine (2026-11-13): exit 0, `native-host.exe` 6144 B from a
+4160 B `Launcher.cs`. The compiler is the .NET Framework `csc.exe` that ships with Windows
+(`Framework64`, then `Framework`); **no .NET SDK is required, and `dotnet` is not used**.
+There is no `.csproj`, so `dotnet build` never applied. Not yet verified on a clean clone
+of this repository - the numbers above are from one machine.
+
+If no compiler can be found the script exits non-zero and prints every path it searched.
+That failure is the intended behaviour: it must not leave a missing or empty executable
+behind while reporting success.
+
+### After moving the repository, or moving to another machine
+
+**Re-run `npm run setup:extension`.** Do this even though `npm run build` and
+`npm run verify` are both green afterwards.
+
+The installed native messaging manifest stores the host's absolute path, and the registry
+entry under `HKCU` points at that manifest. Both live outside this repository. Move the
+checkout and every file in git is fine while Chrome still tries to launch the host from a
+directory that no longer exists - the extension stops connecting and nothing in the build
+output says why. `verify` cannot catch this: it never looks at the installed manifest, so
+"build passed" and "the browser can start the host" are independent facts.
+
+The same applies to a fresh machine: the manifest, the registry key, and
+`native-host.exe` itself are all produced locally, none of them are in git.
+
+To see what is actually installed, read-only and safe to run any time:
+
+```bash
+npm run doctor:host
+```
+
+It reports the host name, where the installed manifest is, the executable path recorded
+inside it, whether that executable exists, and what the registry points at. Run it first
+when the extension stops connecting: it separates "the host is not installed" from "the
+host is installed but points at a path that no longer exists", which is exactly the pair
+`npm run build` and `npm run verify` cannot distinguish. It is deliberately **not** part
+of `verify` - a machine with no Chrome installed is a legitimate state, and a gate that
+goes red there would be switched off within a week.
 
 ## Calibration on a real site (2026-11-12)
 
