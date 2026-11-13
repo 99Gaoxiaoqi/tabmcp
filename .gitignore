@@ -12,3 +12,7 @@ native-host.cmd
 *.log
 probe-*.txt
 admin-result.txt
+
+# Internal review notes live outside the repository (they are not published). Keeping the
+# path ignored means a stray mkdir reports cannot end up in a commit by accident.
+reports/
