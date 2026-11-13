@@ -15,18 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No `cache: npm` on purpose. With setup-node's npm cache enabled, `npm ci` on this
-      # image dies with "Exit handler never called!" before printing anything; without it
-      # the same command succeeds (both measured on run 43351774375).
+      # No `cache: npm` on purpose: with setup-node's npm cache enabled, `npm ci` on this
+      # image dies with "Exit handler never called!" before printing anything.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
+      # Single-line commands on purpose: the same `npm ci` inside a multi-line block
+      # fails on this image with "Exit handler never called!" (runs 43351152655 vs
+      # 43351774375).
+      - name: versions
+        run: npm --version; node --version
       - name: install
-        run: |
-          npm --version
-          node --version
-          npm ci --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --loglevel verbose
 
       # The skip is in the step name on purpose: a reader must not have to open the log
       # to learn that the browser-backed test did not run here.
