@@ -83,6 +83,21 @@ export function toEnvelope(error: unknown): ErrorEnvelope {
  * The tool layer only formats envelopes, so classification has to happen here —
  * otherwise every transport timeout reaches the agent as E_INTERNAL and there is
  * nothing to branch on. `guarded()` and `toEnvelope()` share this one mapping.
+ *
+ * `ECONNREFUSED` is deliberately absent, and that is a measured decision rather than an
+ * oversight - measured 5 runs per case against a port with nothing listening:
+ *
+ *  - In the attach path it never arrives here. `DeferredSession.attach()` wraps the
+ *    failure as `E_NO_BROWSER` first, so reclassifying it changes nothing: 1 attach
+ *    attempt, the same code and the same latency band either way.
+ *  - In the call path (attached, then the connection is refused) it does arrive, but
+ *    mapping it to `E_BROWSER_DISCONNECTED` puts it on `looksDead()` retry whitelist:
+ *    the call reattaches (attempts 1 -> 2), the reattach fails too, and the caller ends
+ *    up with `E_ACTION_FAILED` - a worse answer than the `E_INTERNAL` it replaces,
+ *    because it reads as "the action failed" when the browser is simply gone.
+ *
+ * If this ever needs fixing, the thing to fix is the retry policy in `deferred.ts`,
+ * not this mapping: the label improvement is consumed by the retry it triggers.
  */
 export function classifyUnknown(error: unknown): ActionError {
   if (error instanceof ActionError) return error;
