@@ -26,8 +26,15 @@ export interface DownloadDestination {
 /** Characters that cannot appear in a file name on Windows. */
 const UNSAFE = /[<>:"/\\|?*\u0000-\u001f]/g;
 
-/** Win32 allows ~260 characters unless long paths are enabled; POSIX allows far more. */
-const PATH_LIMIT = process.platform === 'win32' ? 259 : 4096;
+/**
+ * Win32 refuses paths longer than about 260 characters unless long paths are enabled.
+ * Whether they are enabled cannot be detected reliably from here, so this number is only
+ * used to explain a failure that already happened - never to refuse a write up front.
+ */
+const PATH_LIMIT = 259;
+
+/** One name component cannot exceed this on NTFS, long paths or not. */
+const NAME_LIMIT = 255;
 
 /** Enough of a name to recognise it, not enough to bury the message. */
 const NAME_SHOWN = 48;
@@ -59,35 +66,39 @@ export async function placeDownload(
   const target = path.join(dir, filename);
   const shown = showName(filename);
 
+  // One attempt, then explain. Refusing up front looked safer, but this machine has
+  // LongPathsEnabled=1 and writes 307-character paths happily - a pre-check would have
+  // rejected work that succeeds.
+  let stage: 'mkdir' | 'copy' = 'mkdir';
   try {
     await fs.mkdir(dir, { recursive: true });
-  } catch (cause) {
-    // "Check that the directory is writable" was the only hint here, and it is the wrong
-    // instruction when the directory simply cannot exist.
-    throw new ActionError('E_ACTION_FAILED', `could not create ${JSON.stringify(dir)} to save into`, {
-      hint: 'The directory could not be created. Check that its parent exists and that you may write there.',
-      data: { dir, stage: 'mkdir', reason: cause instanceof Error ? cause.message : String(cause) },
-      cause,
-    });
-  }
-
-  // A too-long path fails later with ENOENT, which reads like "missing directory" when
-  // the real cause is the name. Say so before writing anything.
-  if (target.length > PATH_LIMIT) {
-    throw new ActionError('E_ACTION_FAILED', `could not save ${shown} into ${JSON.stringify(dir)}`, {
-      hint:
-        `The full path is ${target.length} characters; Windows allows about ${PATH_LIMIT} unless long ` +
-        'paths are enabled. Use a shorter directory or pass a shorter filename.',
-      data: { dir, filenameLength: filename.length, pathLength: target.length, stage: 'copy' },
-    });
-  }
-
-  try {
+    stage = 'copy';
     await fs.copyFile(captured.path, target);
   } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    // A failed copy can leave a partial file behind; the caller asked for a file there,
+    // not for half of one.
+    await fs.rm(target, { force: true }).catch(() => undefined);
+
+    const hint =
+      stage === 'mkdir'
+        ? 'The directory could not be created. Check that its parent exists and that you may write there.'
+        : filename.length > NAME_LIMIT
+          ? `This file name is ${filename.length} characters; Windows allows 255 per name. Pass a shorter filename.`
+          : target.length > PATH_LIMIT
+            ? `The full path is ${target.length} characters. Windows refuses more than about ${PATH_LIMIT} unless long ` +
+              'paths are enabled on this machine, which cannot be detected from here. Use a shorter directory or filename.'
+            : 'The copy failed. Check that the directory is writable and has space.';
+
     throw new ActionError('E_ACTION_FAILED', `could not save ${shown} into ${JSON.stringify(dir)}`, {
-      hint: 'Check that the directory is writable and that the file is not open elsewhere.',
-      data: { dir, stage: 'copy', reason: cause instanceof Error ? cause.message : String(cause) },
+      hint,
+      data: {
+        dir,
+        filenameLength: filename.length,
+        pathLength: target.length,
+        stage,
+        reason,
+      },
       cause,
     });
   }
