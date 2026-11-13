@@ -160,6 +160,8 @@ Three real defects were found and fixed while wiring it up:
 1. **Chrome 137+ ignores `--load-extension`.** Load the unpacked extension via CDP:
    launch Chrome with `--enable-unsafe-extension-debugging`, then call
    `Extensions.loadUnpacked`. The id is key-derived (`manifest.key`), so it is stable.
+   Re-checked on Chrome 157: the flag is still ignored - launched with it, the extension
+   never appeared, and no amount of waiting made it appear.
 2. **Background tabs receive neither input nor screenshots.** Input needs
    `Emulation.setFocusEmulationEnabled` and capture needs `Page.bringToFront`; without
    them a click silently does nothing and a screenshot hangs until timeout.
@@ -187,6 +189,29 @@ node load-ext.mjs                          # or Extensions.loadUnpacked via CDP
 # 3. talk to it
 node dist/src/main.js --extension --probe
 node dist/src/main.js --extension          # MCP over stdio
+```
+
+#### Installing into the browser a person actually uses
+
+The steps above use a scratch profile, which is right for testing and wrong for daily use:
+`--load-extension` is ignored, so there is nothing to pass on a normal launch. Install it
+by hand once, in the profile you browse with:
+
+1. `npm run setup:extension` (registers the native messaging host; no admin needed, it
+   writes HKCU)
+2. `chrome://extensions` -> turn on **Developer mode** -> **Load unpacked** -> pick
+   `extension/` in this repo
+
+Unpacked extensions loaded this way are written into the profile, so they survive restarts;
+the folder must stay where it is, because the profile stores the path, not a copy. Developer
+mode cannot be turned off afterwards.
+
+**Check it connected, rather than assuming:** Chrome only spawns the native host when the
+extension opens a native messaging port, so the existence of that child process is the
+proof.
+
+```powershell
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'native-host' }
 ```
 
 ### Installing dependencies, and the two things `npm install` can be telling you
