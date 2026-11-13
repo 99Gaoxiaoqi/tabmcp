@@ -286,7 +286,7 @@ export class DeferredSession implements BrowserSession {
         hint: 'Use doctor to see the current tab, or attach over CDP to choose one.',
       });
     }
-// Deliberately not `retryOnDead`: that helper re-attaches and runs the callback
+    // Deliberately not `retryOnDead`: that helper re-attaches and runs the callback
     // again. For a read that is what you want. For this one it would set the default
     // target twice and, because the repeat succeeds, the caller would never learn the
     // first attempt may already have landed. Let the dead error through; the MCP layer
@@ -299,7 +299,13 @@ export class DeferredSession implements BrowserSession {
   }
 
   async newPage(): Promise<RuntimePage> {
-    return this.retryOnDead((session) => session.newPage());
+    // Deliberately not `retryOnDead`: that helper re-attaches and runs the callback
+    // again, which would open a second tab while nothing owns the first one. Unlike
+    // selectTab - where the repeat only sets the same default target twice - this one
+    // leaves a tab behind that no one can find. Let the error through; the caller can
+    // ask for a new page again knowing that the previous attempt may have landed.
+    const session = await this.attach();
+    return session.newPage();
   }
 
   async close(): Promise<void> {
