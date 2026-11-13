@@ -9,6 +9,7 @@
 
 import { CdpSession, type BrowserSession } from './transport/cdp.js';
 import { ExtensionSession } from './transport/extension.js';
+import { DeferredSession } from './transport/deferred.js';
 import { loadAdapters } from './adapters/loader.js';
 import { serveStdio } from './mcp/server.js';
 import { Tab } from './api/tab.js';
@@ -128,10 +129,49 @@ async function openSession(): Promise<BrowserSession> {
   return CdpSession.connect({ endpoint });
 }
 
+/** One pasteable command that brings up whatever the transport needs. */
+function startHint(): string {
+  if (args.extension !== undefined) {
+    return (
+      'Load the TabMCP extension in Chrome (chrome://extensions) and leave one tab open; ' +
+      'it dials the native host itself. Then check `doctor` again.'
+    );
+  }
+  return (
+    'Start a browser with a debugging port first: ' +
+    'Start-Process "$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe" -ArgumentList @(' +
+    '"--remote-debugging-port=9222", "--user-data-dir=$env:TEMP\\tabmcp-probe")'
+  );
+}
+
+/**
+ * The transport is opened on demand rather than at startup, so a browser that is not
+ * running yet costs a tool call instead of the whole stdio connection.
+ */
+function deferredSession(): DeferredSession {
+  if (args.extension !== undefined) {
+    const stateFile =
+      args.extension || (process.env.TABMCP_BROKER_STATE ??
+        path.join(os.tmpdir(), 'tabmcp', 'broker.json'));
+    return new DeferredSession({
+      kind: 'extension',
+      target: stateFile,
+      hint: startHint(),
+      open: () => ExtensionSession.connect(stateFile),
+    });
+  }
+  return new DeferredSession({
+    kind: 'cdp',
+    target: endpoint,
+    hint: startHint(),
+    open: () => CdpSession.connect({ endpoint }),
+  });
+}
+
 if (args.probe) {
   await probe(await openSession());
 } else {
-  const session = await openSession();
+  const session = deferredSession();
   // Load the catalogue before serving so each adapter can be its own tool.
   const catalog = await loadAdapters().catch(() => ({ adapters: [], problems: [] }));
   await serveStdio({ session, queue: makeQueue(), catalog });

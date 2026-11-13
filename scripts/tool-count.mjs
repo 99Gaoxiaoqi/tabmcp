@@ -18,10 +18,18 @@ if (!match) {
 const claimed = Number(match[1]);
 
 const source = fs.readFileSync(SOURCE, 'utf8');
-const actual = (source.match(/server\.registerTool\(/g) ?? []).length;
+// The adapter loop registers a computed name (`toolName`) once, for every adapter
+// installed; only the literal registrations are built-ins the README can promise.
+const staticSites = [...source.matchAll(/server\.registerTool\(\s*'([^']+)'/g)].map((m) => m[1]);
+const actual = staticSites.length;
+const unique = new Set(staticSites);
+if (unique.size !== actual) {
+  console.error(`duplicate built-in tool names: ${actual - unique.size}`);
+  process.exit(1);
+}
 
 if (claimed !== actual) {
   console.error(`tool count mismatch: README says ${claimed}, ${SOURCE} registers ${actual}`);
   process.exit(1);
 }
-console.log(`tool count: README ${claimed} == registerTool sites ${actual}`);
+console.log(`tool count: README ${claimed} == built-in registerTool sites ${actual}`);

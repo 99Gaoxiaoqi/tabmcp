@@ -114,10 +114,12 @@ export function createServer(context: ServerContext): McpServer {
     },
     async () =>
       run(async () => {
-        const report: Record<string, unknown> = { ok: true };
+        // Doctor must answer even with no browser: it is the tool that explains why
+        // nothing else works, so it cannot depend on the thing that is missing.
+        const report: Record<string, unknown> = { ok: true, connected: false, transport: context.session.kind };
         try {
-          report.transport = context.session.kind;
           const tabs = await context.session.pages();
+          report.connected = true;
           report.tabs = tabs.length;
           const active = await context.session.activePage();
           report.activeTab = {
@@ -129,8 +131,13 @@ export function createServer(context: ServerContext): McpServer {
           const frames = await active.frames().catch(() => []);
           report.frames = frames.length;
         } catch (err) {
-          report.ok = false;
-          report.browserError = err instanceof Error ? err.message : String(err);
+          // A missing browser is a state to report, not a crash: keep ok:true and say so.
+          report.connected = false;
+          if (err instanceof ActionError) {
+            report.browserError = { code: err.code, message: err.message, hint: err.hint ?? null };
+          } else {
+            report.browserError = { code: 'E_INTERNAL', message: err instanceof Error ? err.message : String(err), hint: null };
+          }
         }
         try {
           const loaded = await catalog();

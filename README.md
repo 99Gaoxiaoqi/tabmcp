@@ -3,8 +3,9 @@
 
 An MCP server that drives a real browser tab: observe, act, read, and record what the page fetches.
 
-<!-- tool-count: 19 -->
-19 tools over MCP stdio. Grouped by what you want to do, not by name:
+<!-- tool-count: 18 -->
+18 built-in tools over MCP stdio, plus one tool per installed adapter. Grouped by
+what you want to do, not by name:
 
 | You want to | Tools |
 |---|---|
@@ -20,8 +21,8 @@ An MCP server that drives a real browser tab: observe, act, read, and record wha
 | Ask how any of this works | `docs_get` |
 | Check the wiring | `doctor` |
 
-Each installed adapter also registers its own tool (`<site>_<command>`), so the
-runtime list can be longer than 19.
+Each installed adapter also registers its own tool (`<site>_<command>`), so the runtime
+list is 18 plus the number of adapters (`sites_search` shows them).
 
 ## Run
 

@@ -9,6 +9,7 @@
 // Codes are added when a caller can act on them. A declared-but-unused code is an
 // invitation to fill it with the nearest wrong meaning.
 export type ErrorCode =
+  | 'E_NO_BROWSER'
   | 'E_NO_TAB'
   | 'E_BAD_URL'
   | 'E_NAV_TIMEOUT'
