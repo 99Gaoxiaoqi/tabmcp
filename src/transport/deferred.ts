@@ -91,7 +91,16 @@ export class DeferredSession implements BrowserSession {
     return this.live;
   }
 
-  /** True when a browser is attached right now. */
+  /**
+   * True while a session object is attached — not a liveness probe.
+   *
+   * `selectTab` and `newPage` deliberately skip `retryOnDead`, so when one of them
+   * fails on a dead session this stays `true` until the next call that does go through
+   * `retryOnDead` re-attaches and clears it. That is pinned by
+   * `tests/fix-wave3-noel.test.ts`, and it is left alone on purpose: no product code
+   * reads this getter (doctor builds its own `connected` from whether `pages()`
+   * worked), so "fixing" it would only add a lifecycle rule nobody consults.
+   */
   get connected(): boolean {
     return this.live !== null;
   }
@@ -116,8 +125,11 @@ export class DeferredSession implements BrowserSession {
   }
 
   onNetworkEvent(listener: (event: { method: string; params?: Record<string, unknown> }) => void): void {
-    this.listeners.push(listener);
-    this.forward(this.live);
+    if (!this.listeners.includes(listener)) this.listeners.push(listener);
+    // `forward()` only runs when a *session* is first attached, so a listener that
+    // arrives afterwards would never reach the transport. Hand the newcomer over
+    // now; `forward()` stays responsible for "a new session arrived, attach them all".
+    this.handTo(this.live, listener);
   }
 
   /**
@@ -252,11 +264,27 @@ export class DeferredSession implements BrowserSession {
     return value;
   }
 
+  /** Listeners already handed to a given session, so a repeat is not registered twice. */
+  private readonly handedTo = new WeakMap<BrowserSession, Set<(event: { method: string; params?: Record<string, unknown> }) => void>>();
+
+  private handTo(
+    session: BrowserSession | null,
+    listener: (event: { method: string; params?: Record<string, unknown> }) => void,
+  ): void {
+    if (!session?.onNetworkEvent) return;
+    let handed = this.handedTo.get(session);
+    if (!handed) {
+      handed = new Set();
+      this.handedTo.set(session, handed);
+    }
+    if (handed.has(listener)) return;
+    handed.add(listener);
+    session.onNetworkEvent(listener);
+  }
+
   private forward(session: BrowserSession | null): void {
-    if (!session || this.forwarded.has(session)) return;
-    if (!session.onNetworkEvent) return;
-    this.forwarded.add(session);
-    for (const listener of this.listeners) session.onNetworkEvent(listener);
+    if (!session || !session.onNetworkEvent) return;
+    for (const listener of this.listeners) this.handTo(session, listener);
   }
 
   async pages(): Promise<RuntimePage[]> {
