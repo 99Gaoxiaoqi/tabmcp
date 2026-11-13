@@ -8,9 +8,10 @@ import { FakePage } from './mcp-fake.test.js';
 class StatusPage extends FakePage {
   constructor(
     private readonly finalUrl: string,
-    private readonly status: number | null,
+    private readonly landingStatus: number | null,
   ) {
     super();
+    this.status = landingStatus;
   }
 
   override async url(): Promise<string> {
@@ -18,11 +19,11 @@ class StatusPage extends FakePage {
   }
 
   override async title(): Promise<string> {
-    return this.status && this.status >= 400 ? 'Page not found' : 'Example';
+    return this.landingStatus !== null && this.landingStatus >= 400 ? 'Page not found' : 'Example';
   }
 
   override async goto(): Promise<NavigationResult> {
-    return { url: this.finalUrl, status: this.status };
+    return { url: this.finalUrl, status: this.landingStatus };
   }
 }
 

@@ -414,11 +414,28 @@ export function createServer(context: ServerContext): McpServer {
       run(async () => {
         try {
           const tab = await tabFor();
-          if (action === 'reload') await tab.page.reload();
-          else if (action === 'back') await tab.page.back();
-          else await tab.page.forward();
+          // The status belongs to the landing, not to the button: a reload is the most
+          // common way to land on the login page or the 404 you already had.
+          const landed =
+            action === 'reload'
+              ? await tab.page.reload()
+              : action === 'back'
+                ? await tab.page.back()
+                : await tab.page.forward();
           await installAfterNavigation(tab);
-          return { content: [text({ ok: true, action, url: await tab.page.url().catch(() => '') })] };
+          const status = landed.status;
+          const pageError = typeof status === 'number' && status >= 400;
+          return {
+            content: [
+              text({
+                ok: true,
+                action,
+                url: await tab.page.url().catch(() => ''),
+                status,
+                ...(pageError ? { pageError: true } : {}),
+              }),
+            ],
+          };
         } catch (err) {
           return { content: [text(toEnvelope(err))], isError: true };
         }

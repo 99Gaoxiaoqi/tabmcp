@@ -110,9 +110,15 @@ export class FakePage implements RuntimePage {
     return this.evaluate(script);
   }
 
-  async reload(): Promise<void> {}
-  async back(): Promise<void> {}
-  async forward(): Promise<void> {}
+  async reload(): Promise<{ status: number | null }> {
+    return { status: this.status };
+  }
+  async back(): Promise<{ status: number | null }> {
+    return { status: this.status };
+  }
+  async forward(): Promise<{ status: number | null }> {
+    return { status: this.status };
+  }
   async cookies(): Promise<Array<{ name: string; value: string; domain: string }>> {
     return [{ name: 'csrf', value: 'token-123', domain: 'example.test' }];
   }
@@ -125,6 +131,9 @@ export class FakePage implements RuntimePage {
   async networkRead(): Promise<{ cursor: number; entries: Array<Record<string, unknown>>; hasMore: boolean }> {
     return { cursor: 1, entries: [{ sequence: 1, method: 'GET', url: 'https://example.test/api/items', status: 200 }], hasMore: false };
   }
+
+  /** Status the fake reports for reload/back/forward. */
+  status: number | null = 200;
 
   retention: 'deliverable' | 'handoff' | null = null;
   async markDeliverable(): Promise<void> {

@@ -482,11 +482,14 @@ export class ExtensionPage implements RuntimePage {
     return { ok: false, waitedMs: Date.now() - started, detail: 'expectation not met before timeout' };
   }
 
-  async reload(): Promise<void> {
+  async reload(): Promise<{ status: number | null }> {
+    // Subscribe before acting: the document response arrives after the command returns.
+    const status = this.waitForDocumentStatus(8_000);
     await this.send('Page.reload', { ignoreCache: false });
+    return { status: await status };
   }
 
-  private async navigateHistory(delta: number): Promise<void> {
+  private async navigateHistory(delta: number): Promise<{ status: number | null }> {
     const history = await this.send<{
       currentIndex: number;
       entries: Array<{ id: number; url: string }>;
@@ -494,15 +497,17 @@ export class ExtensionPage implements RuntimePage {
     const index = history.currentIndex + delta;
     const target = history.entries[index];
     if (!target) throw new ActionError('E_TARGET_NOT_FOUND', 'no history entry in that direction');
+    const status = this.waitForDocumentStatus(8_000);
     await this.send('Page.navigateToHistoryEntry', { entryId: target.id });
+    return { status: await status };
   }
 
-  async back(): Promise<void> {
-    await this.navigateHistory(-1);
+  async back(): Promise<{ status: number | null }> {
+    return this.navigateHistory(-1);
   }
 
-  async forward(): Promise<void> {
-    await this.navigateHistory(1);
+  async forward(): Promise<{ status: number | null }> {
+    return this.navigateHistory(1);
   }
 
   async cookies(domain: string): Promise<Cookie[]> {

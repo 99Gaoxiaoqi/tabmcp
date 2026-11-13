@@ -11,6 +11,12 @@
 
 import type { NetworkInfo } from '../core/activity.js';
 
+/** Where a reload/back/forward landed, when the transport can tell. */
+export interface NavigationStatus {
+  /** HTTP status of the document, or null when this transport cannot report one. */
+  status: number | null;
+}
+
 export interface NavigationResult {
   url: string;
   status: number | null;
@@ -119,9 +125,9 @@ export interface RuntimePage {
   networkInfo(since: number): Promise<NetworkInfo>;
   /** Frames of the current page, outermost first. */
   frames(): Promise<FrameInfo[]>;
-  reload(): Promise<void>;
-  back(): Promise<void>;
-  forward(): Promise<void>;
+  reload(): Promise<NavigationStatus>;
+  back(): Promise<NavigationStatus>;
+  forward(): Promise<NavigationStatus>;
   /** All cookies visible to the page for a domain. */
   cookies(domain: string): Promise<Array<{ name: string; value: string; domain: string; path?: string }>>;
   /** Click something that downloads, and wait for the file to arrive. */

@@ -25,6 +25,11 @@ import type {
   ScreenshotOptions,
 } from './page.js';
 
+/** Response.status(), when the action produced a response at all. */
+function statusOf(response: { status(): number } | null): number | null {
+  return response ? response.status() : null;
+}
+
 export class PlaywrightPage implements RuntimePage {
   readonly id: string;
   private network: NetworkCounter | undefined;
@@ -140,18 +145,21 @@ export class PlaywrightPage implements RuntimePage {
     }));
   }
 
-  async reload(): Promise<void> {
+  async reload(): Promise<{ status: number | null }> {
     // `load` never fires on a bfcache restore, so waiting for it burns the whole
     // timeout. Commit plus a short bound keeps reload fast and still honest.
-    await this.page.reload({ waitUntil: 'commit', timeout: 10_000 }).catch(() => undefined);
+    const response = await this.page.reload({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
+    return { status: statusOf(response) };
   }
 
-  async back(): Promise<void> {
-    await this.page.goBack({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
+  async back(): Promise<{ status: number | null }> {
+    const response = await this.page.goBack({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
+    return { status: statusOf(response) };
   }
 
-  async forward(): Promise<void> {
-    await this.page.goForward({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
+  async forward(): Promise<{ status: number | null }> {
+    const response = await this.page.goForward({ waitUntil: 'commit', timeout: 10_000 }).catch(() => null);
+    return { status: statusOf(response) };
   }
 
   async cookies(domain: string): Promise<Cookie[]> {
