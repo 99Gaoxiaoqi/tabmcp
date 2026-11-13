@@ -3,6 +3,23 @@
  * Kept as an array of lines so the Windows paths and backticks stay literal.
  */
 export const TOOLS = [
+  '## browser_goto',
+  '',
+  '`ok: true` means the navigation happened, not that you are looking at the page you',
+  'wanted. Two independent flags say what actually arrived:',
+  '',
+  '- `landedElsewhere: true` - the browser ended up at a different URL (a redirect, a',
+  '  login wall)',
+  '- `pageError: true` - the page arrived exactly where you asked, but the server',
+  '  answered with a status of 400 or above. A private repository answers 404 to an',
+  '  anonymous browser: `ok` is true and `landedElsewhere` is false, and what you are',
+  '  reading is "Page not found".',
+  '',
+  'Neither flag implies the other: you can arrive where you asked and get an error page,',
+  'or be redirected to a perfectly good one. Check both before treating the contents as',
+  'the page you asked for. When the host does not resolve at all there is no page and no',
+  'flags: the call fails with `E_NAV_FAILED`.',
+  '',
   '# Tools: how the results are shaped',
   '',
   '## browser_download',

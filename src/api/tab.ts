@@ -80,6 +80,13 @@ export interface GotoResult {
   status: number | null;
   /** Present only when the page loaded but has no usable content. */
   content?: 'empty' | 'placeholder';
+  /**
+   * True when the page arrived but the server answered with an error status (>= 400).
+   * `ok` still means "the navigation happened"; this says "what arrived is not the page
+   * you asked for". A private repository answered 404 to an anonymous browser:
+   * ok:true and landedElsewhere:false both looked like success.
+   */
+  pageError?: true;
 }
 
 export interface ObserveResult {
@@ -229,11 +236,15 @@ export class Tab {
       });
     }
     const landedElsewhere = finalUrl !== url;
+    // Independent of landedElsewhere: you can arrive exactly where you asked and still be
+    // looking at an error page, and you can be redirected to a page that is fine.
+    const pageError = typeof status === 'number' && status >= 400;
     return {
       ok: true,
       requestedUrl: url,
       url: finalUrl,
       landedElsewhere,
+      ...(pageError ? { pageError: true as const } : {}),
       title: await this.page.title().catch(() => ''),
       status,
       ...(content === 'empty' || content === 'placeholder' ? { content } : {}),
