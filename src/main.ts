@@ -4,7 +4,9 @@
  * Modes:
  *   --connect <endpoint>   attach to Chrome already running with a debugging port
  *   --mcp                  speak MCP over stdio (default)
- *   --probe                smoke test: open a local page, exercise every API
+ *   --probe                smoke test: attach to the browser named by --connect (or the
+ *                          default debugging port), then open a local page and exercise
+ *                          every API
  */
 
 import { CdpSession, type BrowserSession } from './transport/cdp.js';
@@ -177,7 +179,29 @@ function deferredSession(): DeferredSession {
 }
 
 if (args.probe) {
-  await probe(await openSession());
+  try {
+    await probe(await openSession());
+  } catch (err) {
+    // A probe run is a diagnosis, so it must end in a diagnosis. Left uncaught, a refused
+    // connection arrives as "node:internal/modules/run_main" and four lines of stack
+    // above "connect ECONNREFUSED", which reads as a crashed program rather than as
+    // "no browser is listening". The hint names the command that starts one.
+    const envelope = toEnvelope(err);
+    // "Nothing is listening" is the ordinary case, not an internal fault: it gets a
+    // branchable code instead of E_INTERNAL, one line instead of playwright's multi-line
+    // "Call log", and the hint that names the command to start a browser. Built through
+    // ActionError so the code is checked against the ErrorCode union, and so the printed
+    // text comes from one object rather than a literal kept in step by hand.
+    const shown = /ECONNREFUSED|connectOverCDP/i.test(envelope.error.message)
+      ? new ActionError('E_BROWSER_DISCONNECTED', `no browser is listening on ${endpoint}`, {
+          hint: startHint(),
+          cause: err,
+        })
+      : envelope.error;
+    console.error(`probe failed: ${shown.code}: ${shown.message.split('\n')[0]}`);
+    if (shown.hint) console.error(`hint: ${shown.hint}`);
+    process.exitCode = 1;
+  }
 } else {
   const session = deferredSession();
   // Load the catalogue before serving so each adapter can be its own tool.
