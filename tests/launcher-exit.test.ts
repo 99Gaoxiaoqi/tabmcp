@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 /**
  * The launcher must not outlive the host it starts.
@@ -21,11 +22,14 @@ import test from 'node:test';
  * nobody closes - so nothing except the child's own exit can end the process.
  */
 
-const REPO_ROOT = process.cwd();
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LAUNCHER = path.join(REPO_ROOT, 'native-host.exe');
 // The launcher is a build artifact and git-ignored, so a clean checkout has none.
 // Skipping is honest here only because the skip message names the command that
-// makes these tests real.
+// makes these tests real - and because the anchor is this file, not the process
+// cwd: `process.cwd()` made the same command exit 0 with the test skipped from
+// `dist/` and run from the repository root, which is the silent shape of a guard
+// that has stopped guarding.
 const NOT_BUILT = !fs.existsSync(LAUNCHER)
   ? 'native-host.exe is not built here; npm run build:launcher makes this test real'
   : false;
