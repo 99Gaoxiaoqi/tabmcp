@@ -43,9 +43,15 @@ export function normalizeCookies(raw: RawCookie[]): Cookie[] {
   return raw.map(normalizeCookie);
 }
 
-/** Domain match used by both transports: exact, leading-dot, or suffix match. */
+/**
+ * Domain match used by both transports: exact, leading-dot, or a true subdomain.
+ *
+ * `endsWith(domain)` alone also matched "notexample.com" for "example.com", which is a
+ * different site. A subdomain must be preceded by a dot.
+ */
 export function cookieMatchesDomain(cookie: { domain?: unknown }, domain: string): boolean {
   if (!domain) return true;
-  const value = String(cookie.domain ?? '');
-  return value === domain || value === `.${domain}` || value.endsWith(domain);
+  const value = String(cookie.domain ?? '').toLowerCase();
+  const wanted = domain.toLowerCase();
+  return value === wanted || value === `.${wanted}` || value.endsWith(`.${wanted}`);
 }

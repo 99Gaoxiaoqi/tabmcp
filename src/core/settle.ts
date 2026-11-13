@@ -47,14 +47,55 @@ export type ActionEffect = 'navigated' | 'changed' | 'none' | 'unknown';
 export interface ActivitySnapshot {
   target: ActivityInfo | null;
   network: NetworkInfo;
+  /** True when a probe threw or a transport declared itself unable to measure. */
+  probeFailed?: boolean;
+  /** The first probe error, kept verbatim so a diagnosis does not have to guess. */
+  probeError?: string;
 }
 
+/** What settle() learned. `probeFailed` means the readings are not evidence. */
+export interface SettleResult {
+  quiet: boolean;
+  pendingRequests: number;
+  probeFailed?: boolean;
+  probeError?: string;
+}
+
+/** A network reading that nobody took is not a quiet network. */
+function isUnavailable(network: NetworkInfo): boolean {
+  return network.unavailable === true;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The optimistic zero that used to stand in for a failed measurement. */
+const UNMEASURED: NetworkInfo = { pending: 0, idleMs: 0, unavailable: true };
+
 export async function snapshot(source: ActivitySource, since: number, scan = false): Promise<ActivitySnapshot> {
+  let probeError: string | undefined;
   const [target, network] = await Promise.all([
-    source.activity({ scan }).catch(() => null),
-    source.network(since).catch(() => ({ pending: 0, idleMs: Number.POSITIVE_INFINITY })),
+    source.activity({ scan }).catch((error: unknown) => {
+      probeError = probeError ?? messageOf(error);
+      return null;
+    }),
+    source.network(since).catch((error: unknown) => {
+      probeError = probeError ?? messageOf(error);
+      return UNMEASURED;
+    }),
   ]);
-  return { target, network };
+  const failed = probeError !== undefined || isUnavailable(network);
+  return {
+    target,
+    network,
+    ...(failed ? { probeFailed: true } : {}),
+    ...(probeError !== undefined
+      ? { probeError }
+      : network.error !== undefined
+        ? { probeError: network.error }
+        : {}),
+  };
 }
 
 /**
@@ -68,17 +109,35 @@ export async function settle(
   since: number,
   capMs: number,
   tuning: SettleTuning = DEFAULT_TUNING,
-): Promise<{ quiet: boolean; pendingRequests: number }> {
+): Promise<SettleResult> {
   const started = Date.now();
   let limit = capMs;
   let pendingRequests = 0;
   let pendingSince: number | undefined;
+  let probeError: string | undefined;
 
   while (Date.now() - started < limit) {
     const [page, net] = await Promise.all([
-      source.activity().catch(() => null),
-      source.network(since).catch(() => ({ pending: 0, idleMs: Number.POSITIVE_INFINITY })),
+      source.activity().catch((error: unknown) => {
+        probeError = probeError ?? messageOf(error);
+        return null;
+      }),
+      source.network(since).catch((error: unknown) => {
+        probeError = probeError ?? messageOf(error);
+        return UNMEASURED;
+      }),
     ]);
+    // A probe that threw, or a transport that says it cannot measure, is not a
+    // quiet page. Answer immediately with the reason: the caller has to know
+    // the readings are missing, and waiting out the cap would only delay that.
+    if (probeError !== undefined || isUnavailable(net)) {
+      return {
+        quiet: false,
+        pendingRequests,
+        probeFailed: true,
+        probeError: probeError ?? net.error ?? 'network activity could not be measured',
+      };
+    }
     pendingRequests = net.pending;
     if (pendingRequests > 0) pendingSince ??= Date.now();
     else pendingSince = undefined;

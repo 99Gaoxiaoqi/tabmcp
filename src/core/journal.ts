@@ -1,3 +1,4 @@
+import { ActionError } from './errors.js';
 /**
  * Network journal: the page's own JSON traffic, kept for cursor reads.
  *
@@ -52,19 +53,36 @@ function matchesPattern(url: string, pattern: string | undefined): boolean {
   if (!pattern) return true;
   if (pattern.startsWith('/') && pattern.lastIndexOf('/') > 0) {
     const lastSlash = pattern.lastIndexOf('/');
+    const source = pattern.slice(1, lastSlash);
+    const flags = pattern.slice(lastSlash + 1);
     try {
-      return new RegExp(pattern.slice(1, lastSlash), pattern.slice(lastSlash + 1)).test(url);
-    } catch {
-      return url.includes(pattern);
+      return new RegExp(source, flags).test(url);
+    } catch (cause) {
+      // Falling back to a substring search turned a typo into a different filter, and
+      // the caller got results that looked like a match. Say the pattern is broken.
+      throw new ActionError('E_BAD_ARGUMENT', `invalid regex pattern ${pattern}`, {
+        hint: 'Pass either plain text or /regex/flags with valid syntax.',
+        data: { pattern, reason: cause instanceof Error ? cause.message : String(cause) },
+        cause,
+      });
     }
   }
   return url.includes(pattern);
+}
+
+function JournalEntry_chars(entry: JournalEntry): number {
+  const body = entry.body;
+  return typeof body === 'string' ? body.length : body === undefined ? 0 : JSON.stringify(body).length;
 }
 
 export class NetworkJournal {
   private readonly entries: JournalEntry[] = [];
   private sequence = 0;
   private readonly pending = new Map<string, { method: string; url: string; at: number }>();
+  /** Running total of body characters, so eviction does not re-serialise everything. */
+  private chars = 0;
+  /** A request whose response was never recorded (non-JSON, failed, or dropped). */
+  private static readonly PENDING_TTL_MS = 120_000;
 
   constructor(private readonly capacity = MAX_ENTRIES) {}
 
@@ -101,19 +119,44 @@ export class NetworkJournal {
   }
 
   private push(entry: Omit<JournalEntry, 'sequence'>): void {
-    this.entries.push({ ...entry, sequence: ++this.sequence });
-    if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity);
-    while (this.entries.length > 1 && this.bodyChars() > MAX_TOTAL_CHARS) this.entries.shift();
+    this.prunePending();
+    const stored: JournalEntry = { ...entry, sequence: ++this.sequence };
+    this.entries.push(stored);
+    this.chars += JournalEntry_chars(stored);
+    if (this.entries.length > this.capacity) {
+      for (const dropped of this.entries.splice(0, this.entries.length - this.capacity)) {
+        this.chars -= JournalEntry_chars(dropped);
+      }
+    }
+    while (this.entries.length > 1 && this.chars > MAX_TOTAL_CHARS) {
+      const dropped = this.entries.shift();
+      if (dropped) this.chars -= JournalEntry_chars(dropped);
+    }
+    if (this.chars < 0) this.chars = 0;
   }
 
-  /** Rough size of what the entries hold, so eviction has something to measure. */
-  private bodyChars(): number {
-    let total = 0;
-    for (const entry of this.entries) {
-      const body = entry.body;
-      total += typeof body === 'string' ? body.length : body === undefined ? 0 : JSON.stringify(body).length;
+  /**
+   * Responses that are not JSON never reach record(), so their requestId would sit in
+   * pending forever. Prune by age instead of dropping the entries on sight: a slow JSON
+   * body still needs its attribution.
+   */
+  private prunePending(): void {
+    if (this.pending.size === 0) return;
+    const cutoff = Date.now() - NetworkJournal.PENDING_TTL_MS;
+    for (const [requestId, started] of this.pending) {
+      if (started.at < cutoff) this.pending.delete(requestId);
     }
-    return total;
+  }
+
+  /** Number of requests started but never attributed; visible for tests and doctor. */
+  get pendingCount(): number {
+    this.prunePending();
+    return this.pending.size;
+  }
+
+  /** Rough size of what the entries hold, measured as they arrive. */
+  private bodyChars(): number {
+    return this.chars;
   }
 
   read(options: NetworkReadOptions = {}): NetworkReadResult {
@@ -146,11 +189,13 @@ export type ContentState = 'ready' | 'empty' | 'placeholder' | 'unknown';
  */
 export const CONTENT_STATE_SCRIPT = `(() => {
   const text = (document.body ? (document.body.innerText || '') : '').replace(/\\s+/g, ' ').trim();
-  if (text.length === 0) return 'empty';
-  const LOADING = /(^|\\s)(loading|请稍候|加载中|正在加载)(\\s|$)/i;
-  if (text.length < 80 && LOADING.test(text)) return 'placeholder';
-  // A single heading is content. Only truly blank pages count as empty.
   const nodes = document.body ? document.body.querySelectorAll('*').length : 0;
-  if (nodes === 0) return 'empty';
+  if (text.length === 0) {
+    // Text is empty: nothing rendered is empty, an empty element tree is a skeleton.
+    return nodes === 0 ? 'empty' : 'placeholder';
+  }
+  const LOADING = /(^|\\s)(loading|\u6b63\u5728\u52a0\u8f7d|\u52a0\u8f7d\u4e2d)(\\s|$)/i;
+  if (text.length < 80 && LOADING.test(text)) return 'placeholder';
+  // Text exists, so the page is not empty regardless of how many elements it uses.
   return 'ready';
 })()`;

@@ -12,13 +12,19 @@
  * "this succeeded somewhere else" cannot be mistaken for "this succeeded where I asked".
  */
 import { ActionError } from '../core/errors.js';
-import type { BrowserSession } from './cdp.js';
+import type { BrowserSession, TabDescriptor } from './cdp.js';
 import type { RuntimePage } from './page.js';
 
 /** What the caller needs to know about a call that did not run where they thought. */
 export interface SessionNotice {
   /** A different page served the call: which one died, which one answered. */
-  replaced?: { previousTabId: string | null; currentTabId: string | null; cause: string };
+  replaced?: {
+    previousTabId: string | null;
+    currentTabId: string | null;
+    cause: string;
+    /** 'observed' = this call returned it; 'lastKnown' = filled from an earlier call. */
+    currentTabIdSource?: 'observed' | 'lastKnown';
+  };
   /**
    * The transport said something that sounds like a dead session, but nothing in the
    * synonym list matched it. Surfaced so a changed message cannot fail silently.
@@ -101,6 +107,10 @@ export class DeferredSession implements BrowserSession {
     // now the handler has usually asked for one, so fill the gap from what it saw.
     if (notice.replaced && !notice.replaced.currentTabId) {
       notice.replaced.currentTabId = this.lastPageId;
+      // Filled in from an earlier observation: say so instead of presenting it as measured.
+      notice.replaced.currentTabIdSource = this.lastPageId ? 'lastKnown' : undefined;
+    } else if (notice.replaced) {
+      notice.replaced.currentTabIdSource = 'observed';
     }
     return notice.replaced || notice.unmatchedDeadText ? notice : null;
   }
@@ -179,14 +189,38 @@ export class DeferredSession implements BrowserSession {
       this.live = null;
       this.pending = null;
       const replacement = await this.attach();
-      const value = await this.remember(await fn(replacement));
-      this.notice.replaced = {
-        previousTabId,
-        // Only what this call actually returned; takeNotice() can fill a gap later.
-        currentTabId: pageIdOf(value),
-        cause: messageOf(err),
-      };
-      return value;
+      try {
+        const value = await this.remember(await fn(replacement));
+        this.notice.replaced = {
+          previousTabId,
+          // Only what this call actually returned; takeNotice() can fill a gap later.
+          currentTabId: pageIdOf(value),
+          cause: messageOf(err),
+        };
+        return value;
+      } catch (retryError) {
+        // The retry failed too. The caller still has to know that the object changed
+        // underneath it, and both reasons have to survive - losing either turns a
+        // two-part failure into a one-line mystery.
+        this.notice.replaced = {
+          previousTabId,
+          currentTabId: this.lastPageId,
+          cause: `${messageOf(err)}; retry on the new session also failed: ${messageOf(retryError)}`,
+        };
+        if (retryError instanceof ActionError) {
+          // data is readonly on ActionError: build a new one with both causes attached.
+          throw new ActionError(retryError.code, retryError.message, {
+            ...(retryError.hint ? { hint: retryError.hint } : {}),
+            data: { ...(retryError.data ?? {}), previousFailure: messageOf(err), previousTabId },
+            cause: retryError.cause ?? retryError,
+          });
+        }
+        throw new ActionError('E_ACTION_FAILED', 'the call failed on the original session and again on the new one', {
+          hint: 'Call doctor, then retry. The page you were using may no longer exist.',
+          data: { first: messageOf(err), second: messageOf(retryError), previousTabId },
+          cause: retryError,
+        });
+      }
     }
   }
 
@@ -227,6 +261,32 @@ export class DeferredSession implements BrowserSession {
 
   async pages(): Promise<RuntimePage[]> {
     return this.retryOnDead((session) => session.pages());
+  }
+
+  /** Optional on BrowserSession: forwarded when the transport offers it. */
+  async tabList(): Promise<TabDescriptor[]> {
+    const session = await this.attach();
+    if (!session.tabList) {
+      throw new ActionError('E_TARGET_UNSUPPORTED', 'this transport cannot list tabs', {
+        hint: 'Use doctor for the current tab, or attach over CDP to list every tab.',
+      });
+    }
+    return this.retryOnDead((live) => (live.tabList as () => Promise<TabDescriptor[]>)());
+  }
+
+  async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
+    if (!this.live?.focusDifference) return null;
+    return this.live.focusDifference().catch(() => null);
+  }
+
+  async selectTab(id: string): Promise<void> {
+    const session = await this.attach();
+    if (!session.selectTab) {
+      throw new ActionError('E_TARGET_UNSUPPORTED', 'this transport cannot select a tab', {
+        hint: 'Use doctor to see the current tab, or attach over CDP to choose one.',
+      });
+    }
+    await this.retryOnDead((live) => (live.selectTab as (tabId: string) => Promise<void>)(id));
   }
 
   async activePage(): Promise<RuntimePage> {

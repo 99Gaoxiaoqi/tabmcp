@@ -28,6 +28,17 @@ export interface NetworkInfo {
   pending: number;
   /** Milliseconds since the last network event. */
   idleMs: number;
+  /**
+   * Set when the transport could not measure the network at all.
+   *
+   * A probe that cannot answer must not be reported as `pending: 0, idleMs:
+   * Infinity`: that is the exact shape of a settled page, so a caller cannot
+   * tell "nothing is in flight" from "nobody looked". Transports set this
+   * instead of inventing a quiet reading.
+   */
+  unavailable?: boolean;
+  /** Why the measurement failed, when `unavailable` is set. */
+  error?: string;
 }
 
 /** Anything that can evaluate a self-contained script in the page. */
@@ -112,8 +123,34 @@ const OBSERVER_SCRIPT = `(() => {
   return true;
 })()`;
 
+/**
+ * Why the last observer injection failed, per probe (page).
+ *
+ * Kept out of the return value so callers that only care about "can I read
+ * activity yet" do not have to thread an error through; doctor-facing code can
+ * ask. Before this map existed the failure was swallowed and the only symptom
+ * was "every action waits out its cap and reports settled: false".
+ */
+const installErrors = new WeakMap<object, string>();
+
+/** The error from the most recent installActivity() attempt, if it failed. */
+export function activityInstallError(probe: ScriptProbe): string | undefined {
+  return installErrors.get(probe as unknown as object);
+}
+
 export async function installActivity(probe: ScriptProbe): Promise<void> {
-  await probe.evaluate(OBSERVER_SCRIPT).catch(() => undefined);
+  try {
+    await probe.evaluate(OBSERVER_SCRIPT);
+    installErrors.delete(probe as unknown as object);
+  } catch (error) {
+    // A navigation can tear the context down mid-injection. Remember it so the
+    // failure stays visible, but do not throw: callers retry after navigation.
+    installErrors.set(probe as unknown as object, messageOf(error));
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function readActivityInPage(probe: ScriptProbe, scan: boolean): Promise<ActivityInfo | null> {

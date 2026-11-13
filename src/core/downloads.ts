@@ -54,7 +54,17 @@ export async function placeDownload(
   captured: CapturedDownload,
   destination: DownloadDestination = {},
 ): Promise<CapturedDownload> {
-  if (!destination.dir) return captured;
+  if (!destination.dir) {
+    // A name without a directory cannot be applied: Playwright already wrote the file
+    // under a random name, and renaming it in place would move it out of its temp folder.
+    if (destination.filename) {
+      throw new ActionError('E_BAD_ARGUMENT', 'filename needs dir', {
+        hint: 'Pass dir together with filename, or omit filename to keep the temporary capture.',
+        data: { filename: destination.filename },
+      });
+    }
+    return captured;
+  }
   if (!captured.path) {
     throw new ActionError('E_ACTION_FAILED', 'the browser captured a download but reported no temporary file', {
       hint: 'Omit dir to see what the transport returned, or retry the download.',

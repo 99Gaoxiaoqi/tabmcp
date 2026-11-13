@@ -14,7 +14,7 @@ import { NetworkCounter, type NetworkInfo } from '../core/activity.js';
 import { ANNOTATE_SCRIPT, REMOVE_ANNOTATION_SCRIPT } from '../core/annotate.js';
 import { CONTENT_STATE_SCRIPT, NetworkJournal } from '../core/journal.js';
 import { cookieMatchesDomain, normalizeCookies, type Cookie } from '../core/cookie.js';
-import type { BrowserSession } from './cdp.js';
+import type { BrowserSession, TabDescriptor } from './cdp.js';
 import type {
   EvaluateOptions,
   Expectation,
@@ -36,7 +36,8 @@ interface BrokerClientOptions {
 }
 
 /** One connection to the broker, shared by every page of this session. */
-class BrokerClient {
+/** Exported so the timeout behaviour can be tested without a real extension. */
+export class BrokerClient {
   private socket: net.Socket;
   private readonly decoder = new FrameDecoder();
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
@@ -108,7 +109,12 @@ class BrokerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`broker request timed out after ${timeoutMs}ms`));
+        reject(
+          new ActionError('E_ACTION_TIMEOUT', `broker request timed out after ${timeoutMs}ms`, {
+            hint: 'The extension did not answer. Check that Chrome is running, then retry.',
+            data: { timeoutMs, method: request.method },
+          }),
+        );
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.socket.write(encodeFrame({ ...request, id } as BrokerRequest));
@@ -156,10 +162,10 @@ export class ExtensionPage implements RuntimePage {
       this.send('Page.enable').catch(() => undefined),
       this.send('Runtime.enable').catch(() => undefined),
       this.send('Network.enable').catch(() => undefined),
-      // A background tab receives neither input nor screenshots reliably: input
-      // events need focus emulation, and capture blocks while the tab is hidden.
+      // Focus emulation only: bringing the tab to the front is a real user-visible action,
+      // so it belongs to focus(), which runs for input and capture - not to every page
+      // object, which is created by read-only calls such as doctor.
       this.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
-      this.send('Page.bringToFront').catch(() => undefined),
     ]);
   }
 
@@ -182,13 +188,23 @@ export class ExtensionPage implements RuntimePage {
     }
   }
 
-  private async evaluateRaw<T>(expression: string, awaitPromise = true): Promise<T> {
+  private async evaluateRaw<T>(expression: string, awaitPromise = true, timeoutMs = 20_000): Promise<T> {
+    // Page script can hang (an await that never settles, a blocked main thread). Without a
+    // bound here the whole queue waits behind it with no way to tell why.
     const response = await this.send<{
       result?: { value?: unknown; description?: string };
       exceptionDetails?: { text?: string; exception?: { description?: string } };
-    }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise, userGesture: true });
+    }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise, userGesture: true }, timeoutMs);
     if (response.exceptionDetails) {
-      throw new ActionError('E_ACTION_FAILED', response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'evaluate failed');
+      const detail = response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? 'evaluate failed';
+      // A timeout inside the page is a different problem from a script that threw.
+      if (/Timed out|timeout/i.test(detail)) {
+        throw new ActionError('E_ACTION_TIMEOUT', detail, {
+          hint: 'The script did not finish. Shorter expressions finish; a pending promise does not.',
+          data: { timeoutMs },
+        });
+      }
+      throw new ActionError('E_ACTION_FAILED', detail);
     }
     return response.result?.value as T;
   }
@@ -249,8 +265,7 @@ export class ExtensionPage implements RuntimePage {
   }
 
   async evaluate<T = unknown>(script: string, options?: EvaluateOptions): Promise<T> {
-    void options;
-    return this.evaluateRaw<T>(script);
+    return this.evaluateRaw<T>(script, true, options?.timeoutMs ?? 20_000);
   }
 
   /** Resolves an element's box, scrolling it into view first. */
@@ -717,9 +732,67 @@ export class ExtensionSession implements BrowserSession {
     return /^(https?|about|file):/i.test(tab.url ?? '') || (tab.url ?? '') === '';
   }
 
+  /**
+   * One page object per tab. Building a new one on every call reset the object's own
+   * state - the network journal above all - so `doctor` followed by `browser_network_read`
+   * reported "this page made no requests". The CDP transport caches for the same reason.
+   */
+  private readonly pageCache = new Map<number, ExtensionPage>();
+
+  private pageFor(tabId: number): ExtensionPage {
+    const existing = this.pageCache.get(tabId);
+    if (existing && !existing.isClosed()) return existing;
+    const created = new ExtensionPage(this.client, tabId, (listener) => this.listeners.push(listener));
+    this.pageCache.set(tabId, created);
+    return created;
+  }
+
   async pages(): Promise<RuntimePage[]> {
     const tabs = (await this.tabs()).filter((tab) => ExtensionSession.usable(tab));
-    return tabs.map((tab) => new ExtensionPage(this.client, tab.tabId, (listener) => this.listeners.push(listener)));
+    const live = new Set(tabs.map((tab) => tab.tabId));
+    for (const tabId of this.pageCache.keys()) {
+      if (!live.has(tabId)) this.pageCache.delete(tabId);
+    }
+    return tabs.map((tab) => this.pageFor(tab.tabId));
+  }
+
+  async tabList(): Promise<TabDescriptor[]> {
+    const tabs = (await this.tabs()).filter((tab) => ExtensionSession.usable(tab));
+    const current = this.active && !this.active.isClosed() ? String(this.active.id) : null;
+    return tabs.map((tab) => ({
+      id: `ext-${tab.tabId}`,
+      url: tab.url ?? '',
+      title: tab.title ?? '',
+      currentTarget: `ext-${tab.tabId}` === current,
+      // chrome.tabs.active is the browser's own answer to "is the user looking at it".
+      focused: Boolean(tab.active),
+    }));
+  }
+
+  async focusDifference(): Promise<{ current: string | null; focused: string | null } | null> {
+    const tabs = (await this.tabs()).filter((tab) => ExtensionSession.usable(tab));
+    const current = this.active && !this.active.isClosed() ? String(this.active.id) : null;
+    const front = tabs.find((tab) => tab.active);
+    const focused = front ? `ext-${front.tabId}` : null;
+    if (!focused || !current || focused === current) return null;
+    return { current, focused };
+  }
+
+  async selectTab(id: string): Promise<void> {
+    const match = /^ext-(\d+)$/.exec(id);
+    if (!match) {
+      throw new ActionError('E_NO_TAB', `no tab with id ${id}`, {
+        hint: 'Call browser_tabs to list the ids this session can use.',
+        data: { id },
+      });
+    }
+    const tabId = Number(match[1]);
+    const tabs = await this.tabs();
+    if (!tabs.some((tab) => tab.tabId === tabId)) {
+      throw new ActionError('E_NO_TAB', `no tab with id ${id}`, { data: { id } });
+    }
+    // Sticky on purpose, and through the cache so the new target keeps its journal.
+    this.active = this.pageFor(tabId);
   }
 
   /** Hand the replacement news to the caller once. */
@@ -738,7 +811,7 @@ export class ExtensionSession implements BrowserSession {
     // No usable tab at all: open one rather than attaching to a page the debugger
     // is not allowed to touch.
     if (!target) return this.newPage();
-    this.active = new ExtensionPage(this.client, target.tabId, (listener) => this.listeners.push(listener));
+    this.active = this.pageFor(target.tabId);
     if (abandoned) {
       this.replaced = {
         previousTabId: abandoned,
@@ -752,12 +825,7 @@ export class ExtensionSession implements BrowserSession {
   async newPage(): Promise<RuntimePage> {
     const created = (await this.client.request({ method: 'create', params: {} }, 15_000)) as { tabId: number };
     this.owned.set(created.tabId, null);
-    const page = new ExtensionPage(
-      this.client,
-      created.tabId,
-      (listener) => this.listeners.push(listener),
-      (tabId, retention) => this.owned.set(tabId, retention),
-    );
+    const page = this.pageFor(created.tabId);
     this.active = page;
     return page;
   }

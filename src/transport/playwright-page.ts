@@ -10,7 +10,7 @@ import type { Page } from 'playwright-core';
 import { ANNOTATE_SCRIPT, REMOVE_ANNOTATION_SCRIPT } from '../core/annotate.js';
 import { CONTENT_STATE_SCRIPT, NetworkJournal } from '../core/journal.js';
 import { cookieMatchesDomain, normalizeCookies, type Cookie } from '../core/cookie.js';
-import { NetworkCounter, type NetworkInfo } from '../core/activity.js';
+import { NetworkCounter, activityInstallError, type NetworkInfo } from '../core/activity.js';
 import type {
   EvaluateOptions,
   Expectation,
@@ -69,9 +69,28 @@ export class PlaywrightPage implements RuntimePage {
   }
 
   async evaluate<T = unknown>(script: string, options?: EvaluateOptions): Promise<T> {
-    const result = await this.page.evaluate(script);
-    void options;
-    return result as T;
+    const timeoutMs = options?.timeoutMs;
+    const run = this.page.evaluate(script) as Promise<T>;
+    if (!timeoutMs || timeoutMs <= 0) return run;
+    // Playwright has no timeout for evaluate: a page whose main thread is stuck
+    // would otherwise hang the tool forever. Race it, and clear the timer so a
+    // fast answer does not keep the process alive.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const guard = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new ActionError('E_ACTION_TIMEOUT', `page.evaluate did not return within ${timeoutMs}ms`, {
+            hint: 'The page may be busy or blocked on a modal; try again or read text instead.',
+            data: { timeoutMs },
+          }),
+        );
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([run, guard]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async evaluateInFrame(target: { index?: number; frameId?: string }, script: string): Promise<unknown> {
@@ -353,21 +372,51 @@ export class PlaywrightPage implements RuntimePage {
 
   async networkInfo(since: number): Promise<NetworkInfo> {
     const counter = await this.ensureNetwork();
-    return counter ? counter.info(since) : { pending: 0, idleMs: Number.POSITIVE_INFINITY };
+    if (counter) return counter.info(since);
+    // Do not answer "pending: 0, idleMs: Infinity" here: that is what a settled
+    // page looks like, so the caller would read a broken instrument as silence.
+    // idleMs stays at 0 so even a reader that ignores `unavailable` treats it
+    // as "not quiet".
+    return {
+      pending: 0,
+      idleMs: 0,
+      unavailable: true,
+      ...(this.networkError !== undefined ? { error: this.networkError } : {}),
+    };
+  }
+
+  /** Last failure from attaching the network counter; cleared when an attach works. */
+  private networkError: string | undefined;
+
+  get networkDiagnostics(): string | undefined {
+    return this.networkError;
+  }
+
+  /**
+   * Why the in-page activity observer could not be installed, if it could not.
+   * Doctor surfaces this: without it the only symptom is every action waiting
+   * out its cap and reporting settled: false.
+   */
+  get activityDiagnostics(): string | undefined {
+    return activityInstallError(this);
   }
 
   private async ensureNetwork(): Promise<NetworkCounter | undefined> {
+    // No failure cache on purpose: attaching fails while a page navigates and
+    // succeeds a moment later, so every call gets its own attempt.
     if (this.network) return this.network;
     try {
       const session = await this.page.context().newCDPSession(this.page);
       await session.send('Network.enable');
       const counter = new NetworkCounter();
       this.network = counter;
+      this.networkError = undefined;
       session.on('Network.requestWillBeSent', (event) => counter.started(event.requestId));
       session.on('Network.loadingFinished', (event) => counter.finished(event.requestId));
       session.on('Network.loadingFailed', (event) => counter.finished(event.requestId));
       return counter;
-    } catch {
+    } catch (error) {
+      this.networkError = error instanceof Error ? error.message : String(error);
       return undefined;
     }
   }
