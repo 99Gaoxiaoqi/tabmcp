@@ -19,7 +19,7 @@ jobs:
       # image dies with "Exit handler never called!" before printing anything.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       # Single-line commands on purpose: the same `npm ci` inside a multi-line block
       # fails on this image with "Exit handler never called!" (runs 43351152655 vs
