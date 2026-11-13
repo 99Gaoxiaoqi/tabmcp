@@ -25,7 +25,9 @@ if (process.argv.includes('--check')) {
     console.error(`${target} is missing; run npm run setup:extension`);
     process.exit(1);
   }
-  const current = fs.readFileSync(target, 'utf8').replace(/^\uFEFF/, '');
+  // Compare content, not bytes: a Windows checkout with autocrlf rewrites this file to
+// CRLF, and a byte comparison then reports drift that does not exist (CI run 43353179298).
+const current = fs.readFileSync(target, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
   if (current !== body) {
     console.error(`${target} does not match host.config.json; regenerate it`);
     process.exit(1);
